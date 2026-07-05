@@ -77,16 +77,33 @@ async function fetchStatementGrid() {
   return null;
 }
 
-// ── NAME → SLACK ID — INTEGRATION POINT, DELIBERATELY NOT WIRED ──────────────
-// No name→Slack-ID mapping exists anywhere in this codebase yet (chase
-// recipients are plain first names from the escalation lists). Until a
-// mapping is added (likely a small tab in the same workbook, or Slack
-// users.lookupByEmail once the Finance bot token exists), this returns null
-// for every name and sendChaseNudges warn-and-skips — never crashes, never
-// guesses an ID.
-// TODO(slack-ids): replace with a real lookup once a mapping source exists.
-function resolveSlackId(name) { // eslint-disable-line no-unused-vars
-  return null;
+// ── NAME → SLACK ID ───────────────────────────────────────────────────────────
+// Static map, looked up once via Slack's user search for everyone across all
+// four escalation lists (Potential Owners, Managers, Roee+Yulia). Two names
+// ("Gal", "Nadav") had more than one Slack match — confirmed with Lee which
+// account is correct before adding them here. Falls back to null (warn +
+// skip, never guess) for anyone not in this map, e.g. a name typo'd on the
+// Vendor Ownership sheet or a future hire not yet added below.
+const SLACK_ID_BY_NAME = {
+  Ron: "U05KWG707DG",
+  Roee: "U057W53SUEN",
+  Elad: "U064M72MVFS",
+  Lee: "U06LG6L3E1H",
+  Marco: "U06AERTAPR6",
+  Diana: "U06TWLVF1R6",
+  Aviad: "U05QEAJDK09",
+  Aviv: "U05820C9SSV",
+  Richard: "U088RRKVDGT",
+  Olivia: "U06231ZUM0S",
+  Bruni: "U09R1PHQMGC",
+  Rafael: "U06SLH4C0CA",
+  Gal: "U06PZV5K6LC",
+  Nadav: "U07L3GS96KE",
+  Yulia: "U088YU5HD4H",
+};
+
+function resolveSlackId(name) {
+  return SLACK_ID_BY_NAME[name] ?? null;
 }
 
 // Persist a chase state row: append when new, in-place update otherwise.
