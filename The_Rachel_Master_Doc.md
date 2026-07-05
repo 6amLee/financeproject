@@ -4,6 +4,17 @@
 
 ---
 
+## ⚠️ SUPERSEDED — intake rebuilt as code (read this first)
+
+The Make.com scenario described below was the first build. After the base64 fix (§7) finally landed, three more bugs surfaced — Claude occasionally wraps its JSON in markdown fences (breaking Parse JSON), only PDF attachments were handled (no images), and no-attachment emails ("Branch B") were never built. Debugging Make with no API/MCP access meant every fix required a slow screenshot-and-retry loop with the user, so the intake pipeline was **rewritten as a Node.js service** and deployed to Railway instead, fixing all three gaps directly in code.
+
+- **Repo:** `github.com/6amLee/financeproject` (separate from Monica's repo — different data sensitivity, different owners, own Google service account, own Anthropic key).
+- **Status:** built, tested (vitest), pushed. Blocked only on Ron issuing a new Anthropic API key (the working key was exposed in a chat session and needs rotating) before Railway's first real deploy can run.
+- **The Rachel** (statement matching + Slack chase, §10 below) is being designed and built directly in code from the start — see `Rachel_Design_Doc.md` in this repo for the full spec, grounded in the real statement export and Vendor Ownership sheet.
+- Sections 1–9 below remain as a historical record of what Make.com did and why each piece existed — useful context, but **the Make scenario itself should be turned off** once the new service is verified working, to avoid double-processing.
+
+---
+
 ## 1\. What this is
 
 Two connected systems:
