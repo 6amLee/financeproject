@@ -12,6 +12,7 @@ The Make.com scenario described below was the first build. After the base64 fix 
 - **Status:** built, tested (vitest), pushed. Blocked only on Ron issuing a new Anthropic API key (the working key was exposed in a chat session and needs rotating) before Railway's first real deploy can run.
 - **The Rachel** (statement matching + Slack chase, §10 below) is being designed and built directly in code from the start — see `Rachel_Design_Doc.md` in this repo for the full spec, grounded in the real statement export and Vendor Ownership sheet.
 - Sections 1–9 below remain as a historical record of what Make.com did and why each piece existed — useful context, but **the Make scenario itself should be turned off** once the new service is verified working, to avoid double-processing.
+- **Naming:** the Railway service running The Rachel's code was renamed to **Luna**. Code/file names are unchanged (`rachel.js`, `Rachel Ledger` sheet tab, etc.) — only the Railway service name and its `LUNA_POLL_INTERVAL_MINUTES` env var follow the rename. "The Rachel" throughout this doc refers to the same system now running as the Luna service.
 
 ---
 

@@ -57,8 +57,12 @@ const SHEETS_ID = process.env.GOOGLE_SHEETS_ID;
 const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN || "";
 // Separate from index.js's POLL_INTERVAL_MINUTES — different cadence for a
 // different loop. Chase thresholds are 24h apart, so hourly is plenty.
+// Env var is named LUNA_ (not RACHEL_) — the Railway service was renamed to
+// "Luna" after this code was first written; the code/file names (rachel.js,
+// chase.js, etc.) were intentionally left as-is, only the env var + docs
+// follow the rename.
 const RACHEL_POLL_INTERVAL_MINUTES =
-  Number(process.env.RACHEL_POLL_INTERVAL_MINUTES) || 60;
+  Number(process.env.LUNA_POLL_INTERVAL_MINUTES) || 60;
 
 // Master DB columns A–O per sheets.js buildReceiptRow / matcher.js MASTER_COL.
 const MASTER_DB_RANGE = "'Master DB'!A2:O";
@@ -213,7 +217,7 @@ async function processCluster({ cluster, missingCount, existingState, ownershipM
 }
 
 async function pollCycle() {
-  console.log(`Rachel cycle started at ${new Date().toISOString()}${dryRun ? " [dry-run]" : ""}`);
+  console.log(`Luna cycle started at ${new Date().toISOString()}${dryRun ? " [dry-run]" : ""}`);
   try {
     const grid = await fetchStatementGrid();
     if (!grid) {
@@ -273,15 +277,15 @@ async function pollCycle() {
       }
     }
   } catch (e) {
-    console.error("Rachel cycle failed:", e.message);
+    console.error("Luna cycle failed:", e.message);
   }
 }
 
 if (runOnce) {
   await pollCycle();
-  console.log("Single Rachel cycle complete (--once).");
+  console.log("Single Luna cycle complete (--once).");
 } else {
-  console.log(`The Rachel running — polling every ${RACHEL_POLL_INTERVAL_MINUTES} minute(s).`);
+  console.log(`Luna running — polling every ${RACHEL_POLL_INTERVAL_MINUTES} minute(s).`);
   await pollCycle();
   setInterval(pollCycle, RACHEL_POLL_INTERVAL_MINUTES * 60 * 1000);
 }

@@ -1,5 +1,7 @@
 # The Rachel — Design Doc (Stage 0–3: Normalizer, Matching, Ownership Resolution, Slack Chase)
 
+> **Naming note:** the Railway service running this code was renamed to **Luna** after this doc and the underlying code were written. Code file/function names (`rachel.js`, `chase.js`, `Rachel Ledger`/`Rachel Chase State` sheet tabs, etc.) were intentionally left unchanged — only the Railway service name and its `LUNA_POLL_INTERVAL_MINUTES` env var follow the rename. "The Rachel" below refers to the same system now running as the Luna service.
+
 ## Context
 
 The Node.js receipt-intake service (emails → Claude → Master DB rows) is built, pushed to `github.com/6amLee/financeproject`, and blocked only on Ron issuing a rotated Anthropic key. The Master Doc's §10 describes "The Rachel" — the second half of the system: reconcile the credit-card statement against the Master DB daily and chase missing receipts over Slack. It was never built; only Stage 0 (statement normalizer) was "prototyped." This doc designs all four stages end-to-end, grounded in two real files read this session:
