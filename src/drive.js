@@ -1,0 +1,32 @@
+// ── GOOGLE DRIVE ──────────────────────────────────────────────────────────────
+// Archives the raw receipt file and returns a shareable link for the sheet.
+
+import { Readable } from "node:stream";
+import { google } from "googleapis";
+import { getGoogleAuth } from "./googleAuth.js";
+
+let _drive = null;
+function getDrive() {
+  if (!_drive) _drive = google.drive({ version: "v3", auth: getGoogleAuth() });
+  return _drive;
+}
+
+export async function uploadToDrive({ filename, mimeType, base64Data, folderId }) {
+  const res = await getDrive().files.create({
+    requestBody: {
+      name: filename,
+      parents: folderId ? [folderId] : undefined,
+    },
+    media: {
+      mimeType,
+      body: Readable.from(Buffer.from(base64Data, "base64")),
+    },
+    fields: "id, webViewLink",
+    supportsAllDrives: true,
+  });
+
+  if (!res.data.webViewLink) {
+    throw new Error(`Drive upload of "${filename}" returned no webViewLink`);
+  }
+  return res.data.webViewLink;
+}

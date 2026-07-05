@@ -1,0 +1,20 @@
+{
+  "name": "finance-receipt-intake",
+  "version": "1.0.0",
+  "type": "module",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "start": "node index.js",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "googleapis": "^173.0.0"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.9"
+  }
+}
