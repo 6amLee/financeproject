@@ -27,6 +27,17 @@ export async function getExistingReceiptNumbers(sheetId) {
   );
 }
 
+// Generic tab read (design doc: extend sheets.js with generic helpers
+// reusable by the Rachel modules). Used by rachel.js to read Master DB rows
+// and the Vendor Ownership tab. Read-only — doesn't touch the write queue.
+export async function readTabRows(sheetId, rangeA1) {
+  const res = await getSheets().spreadsheets.values.get({
+    spreadsheetId: sheetId,
+    range: rangeA1,
+  });
+  return res.data.values || [];
+}
+
 let _sheetsWriteQueue = Promise.resolve();
 
 export function appendReceiptRow(sheetId, rowValues) {
