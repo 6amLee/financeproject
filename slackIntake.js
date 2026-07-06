@@ -180,31 +180,37 @@ const server = http.createServer((req, res) => {
   req.on("data", (c) => chunks.push(c));
   req.on("end", async () => {
     const rawBody = Buffer.concat(chunks).toString();
+    console.log(`Slack interaction received: ${req.method} ${req.url} (${rawBody.length} bytes)`);
 
     if (!verifySlackRequest(
       rawBody,
       req.headers["x-slack-request-timestamp"] || "",
       req.headers["x-slack-signature"] || ""
     )) {
+      console.error("Slack signature verification failed — check SLACK_SIGNING_SECRET");
       res.writeHead(403); res.end("Forbidden"); return;
     }
 
     let payload;
     try {
       payload = JSON.parse(new URLSearchParams(rawBody).get("payload") || "{}");
-    } catch {
+    } catch (e) {
+      console.error("Failed to parse Slack payload:", e.message);
       res.writeHead(400); res.end(); return;
     }
+
+    console.log(`Slack payload type: ${payload.type}, action: ${payload.actions?.[0]?.action_id || payload.view?.callback_id || "n/a"}`);
 
     try {
       if (payload.type === "block_actions") {
         const action = payload.actions?.[0];
         if (action?.action_id === "open_receipt_modal") {
           const data = JSON.parse(action.value);
-          await slackApi("views.open", {
+          const result = await slackApi("views.open", {
             trigger_id: payload.trigger_id,
             view: buildModal(data),
           });
+          console.log(`views.open result: ok=${result.ok}`);
         }
         res.writeHead(200); res.end(); return;
       }
@@ -219,7 +225,7 @@ const server = http.createServer((req, res) => {
         return;
       }
     } catch (e) {
-      console.error("Interaction handler error:", e.message);
+      console.error("Interaction handler error:", e.message, e.stack);
     }
 
     res.writeHead(200); res.end();
