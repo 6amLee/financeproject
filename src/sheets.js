@@ -59,11 +59,42 @@ export function appendReceiptRow(sheetId, rowValues) {
   return task;
 }
 
+// ── SLACK INTAKE CURSOR ───────────────────────────────────────────────────────
+// "Slack Intake State" tab: a single data cell (A2) holding the Slack message
+// timestamp of the last-processed message. Slack timestamps are strings like
+// "1234567890.123456" — stored as-is, compared as strings (lexicographic order
+// works because they're zero-padded Unix seconds with a fixed-width decimal).
+const SLACK_INTAKE_TAB = "Slack Intake State";
+
+export async function getSlackIntakeCursor(sheetId) {
+  const res = await getSheets().spreadsheets.values.get({
+    spreadsheetId: sheetId,
+    range: `'${SLACK_INTAKE_TAB}'!A2`,
+  });
+  return (res.data.values || [])[0]?.[0] || "";
+}
+
+export function setSlackIntakeCursor(sheetId, ts) {
+  const task = _sheetsWriteQueue.then(() =>
+    getSheets().spreadsheets.values.update({
+      spreadsheetId: sheetId,
+      range: `'${SLACK_INTAKE_TAB}'!A2`,
+      valueInputOption: "RAW",
+      requestBody: { values: [[ts]] },
+    })
+  );
+  _sheetsWriteQueue = task.then(
+    () => {},
+    (e) => console.error("Slack cursor write error:", e.message)
+  );
+  return task;
+}
+
 // Column order per Master Doc §4:
 // Captured at · Source · Expense type · Date · Currency · Amount · Paid by ·
 // Credit card · Cardholder · Provider · Receipt No. · Comments · Invoice link ·
 // Status · Matched Amex txn
-export function buildReceiptRow({ parsed, sourceEmail, invoiceLink }) {
+export function buildReceiptRow({ parsed, sourceEmail, invoiceLink, cardholder = "" }) {
   const cell = (v) => (v === null || v === undefined ? "" : v);
   return [
     new Date().toISOString(),        // Captured at
@@ -74,7 +105,7 @@ export function buildReceiptRow({ parsed, sourceEmail, invoiceLink }) {
     cell(parsed.amount),             // Amount
     cell(parsed.suggested_paid_by),  // Paid by
     "",                              // Credit card (not derivable from receipt)
-    "",                              // Cardholder (not derivable from receipt)
+    cell(cardholder),                // Cardholder
     cell(parsed.provider),           // Provider
     cell(parsed.receipt_no),         // Receipt No.
     cell(parsed.notes),              // Comments

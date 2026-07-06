@@ -17,14 +17,18 @@ const IMAGE_MEDIA_TYPES = new Set([
 
 // Pure helper — exported so the MIME-branching is unit-testable without
 // hitting the Anthropic API.
-export function buildContentBlocks({ mimeType, base64Data, textBody }) {
+export function buildContentBlocks({ mimeType, base64Data, textBody, context }) {
+  const prompt = context
+    ? `${RECEIPT_PROMPT}\n\nAdditional context from the submitter: ${context}`
+    : RECEIPT_PROMPT;
+
   if (base64Data && mimeType === "application/pdf") {
     return [
       {
         type: "document",
         source: { type: "base64", media_type: "application/pdf", data: base64Data },
       },
-      { type: "text", text: RECEIPT_PROMPT },
+      { type: "text", text: prompt },
     ];
   }
 
@@ -34,7 +38,7 @@ export function buildContentBlocks({ mimeType, base64Data, textBody }) {
         type: "image",
         source: { type: "base64", media_type: mimeType, data: base64Data },
       },
-      { type: "text", text: RECEIPT_PROMPT },
+      { type: "text", text: prompt },
     ];
   }
 
@@ -43,7 +47,7 @@ export function buildContentBlocks({ mimeType, base64Data, textBody }) {
     return [
       {
         type: "text",
-        text: `${RECEIPT_PROMPT}\n\nExtract from the following email body instead of a document:\n\n${textBody}`,
+        text: `${prompt}\n\nExtract from the following email body instead of a document:\n\n${textBody}`,
       },
     ];
   }
@@ -59,8 +63,8 @@ function getClient() {
   return _client;
 }
 
-export async function extractReceiptData({ mimeType, base64Data, textBody }) {
-  const content = buildContentBlocks({ mimeType, base64Data, textBody });
+export async function extractReceiptData({ mimeType, base64Data, textBody, context }) {
+  const content = buildContentBlocks({ mimeType, base64Data, textBody, context });
 
   const response = await getClient().messages.create({
     model: "claude-haiku-4-5",
