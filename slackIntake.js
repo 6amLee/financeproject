@@ -137,6 +137,8 @@ function selectInput(blockId, label, options, initial, placeholder) {
 
 function buildModal({ prepped, meta }) {
   const p = prepped || {};
+  // CC field is hidden when the submitter is paying personally — no company card involved.
+  const showCC = p.paid_by !== "Employee";
   return {
     type: "modal",
     callback_id: "receipt_form",
@@ -149,7 +151,7 @@ function buildModal({ prepped, meta }) {
       {
         type: "input",
         block_id: "date",
-        label: { type: "plain_text", text: "Date of Purchase / Date of Charge" },
+        label: { type: "plain_text", text: "Date of Purchase" },
         element: {
           type: "datepicker",
           action_id: "val",
@@ -166,13 +168,23 @@ function buildModal({ prepped, meta }) {
         EXPENSE_TYPES.map((e) => opt(e)),
         p.expense_type, "Select type"
       ),
-      selectInput("paid_by", "Paid By",
-        [opt("Organization"), opt("Employee")],
-        p.paid_by, "Select"
-      ),
-      selectInput("cc_last4", "Credit Card (required for organization expenses)",
-        CC_OPTIONS, p.cc_last4, "Select card"
-      ),
+      // dispatch_action: re-render the modal when Paid By changes so the
+      // CC field appears (Organization) or disappears (Employee) immediately.
+      {
+        type: "input",
+        block_id: "paid_by",
+        dispatch_action: true,
+        label: { type: "plain_text", text: "Paid By" },
+        element: {
+          type: "static_select",
+          action_id: "val",
+          options: [opt("Organization"), opt("Employee")],
+          ...(p.paid_by ? { initial_option: opt(p.paid_by) } : {}),
+          placeholder: { type: "plain_text", text: "Select" },
+        },
+      },
+      ...(showCC ? [selectInput("cc_last4", "Credit Card (required for organization expenses)",
+        CC_OPTIONS, p.cc_last4, "Select card")] : []),
       textInput("receipt_no", "Receipt / Invoice # (optional)", p.receipt_no, "as printed on document", true),
       textInput("notes", "Notes (optional)", p.notes, "Any additional context", true, true),
     ],
@@ -214,6 +226,7 @@ const server = http.createServer((req, res) => {
     try {
       if (payload.type === "block_actions") {
         const action = payload.actions?.[0];
+
         if (action?.action_id === "open_receipt_modal") {
           const data = JSON.parse(action.value);
           const result = await slackApi("views.open", {
@@ -222,6 +235,29 @@ const server = http.createServer((req, res) => {
           });
           console.log(`views.open result: ok=${result.ok}`);
         }
+
+        // Paid By changed — re-render modal to show/hide CC field.
+        if (action?.block_id === "paid_by") {
+          const cv = payload.view?.state?.values || {};
+          const newPaidBy = action.selected_option?.value;
+          const currentPrepped = {
+            provider:     cv.provider?.val?.value ?? null,
+            date:         cv.date?.val?.selected_date ?? null,
+            amount:       cv.amount?.val?.value ?? null,
+            currency:     cv.currency?.val?.selected_option?.value ?? null,
+            expense_type: cv.expense_type?.val?.selected_option?.value ?? null,
+            paid_by:      newPaidBy,
+            cc_last4:     cv.cc_last4?.val?.selected_option?.value ?? null,
+            receipt_no:   cv.receipt_no?.val?.value ?? null,
+            notes:        cv.notes?.val?.value ?? null,
+          };
+          const meta = JSON.parse(payload.view?.private_metadata || "{}");
+          await slackApi("views.update", {
+            view_id: payload.view.id,
+            view: buildModal({ prepped: currentPrepped, meta }),
+          });
+        }
+
         res.writeHead(200); res.end(); return;
       }
 
