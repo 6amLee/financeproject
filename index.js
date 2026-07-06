@@ -90,7 +90,7 @@ async function processMessage(messageId, existingReceiptNumbers) {
     }
     await appendReceiptRow(SHEETS_ID, buildReceiptRow({ parsed, sourceEmail: from, invoiceLink }));
     if (receiptNo) existingReceiptNumbers.add(receiptNo);
-    console.log(`Added row: ${parsed.provider} · ${parsed.amount} ${parsed.currency} · receipt ${receiptNo || "(none)"}`);
+    console.log(`Added row: ${parsed.provider} · ${parsed.amount} ${parsed.currency} · ${parsed.document_type || "receipt"} ${receiptNo || "(none)"}`);
   }
 
   // Swap labels so the message isn't reprocessed on the next tick.

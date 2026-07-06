@@ -6,7 +6,7 @@
     "node": ">=18.0.0"
   },
   "scripts": {
-    "start": "node index.js & node rambo.js & wait",
+    "start": "node index.js & node rambo.js & node slackIntake.js & wait",
     "test": "vitest run",
     "test:watch": "vitest"
   },

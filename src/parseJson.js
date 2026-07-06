@@ -4,6 +4,7 @@
 
 const REQUIRED_KEYS = [
   "is_receipt",
+  "document_type",
   "provider",
   "date",
   "amount",

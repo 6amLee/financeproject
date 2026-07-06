@@ -40,6 +40,36 @@ export async function readTabRows(sheetId, rangeA1) {
 
 let _sheetsWriteQueue = Promise.resolve();
 
+// Error Log tab columns: Logged at · Service · Message ID · Sender · Subject · Attachment · Error
+const ERROR_LOG_SHEET = "Error Log";
+
+export function appendErrorRow(sheetId, { service, messageId, sender, subject, attachment, error }) {
+  const task = _sheetsWriteQueue.then(() =>
+    getSheets().spreadsheets.values.append({
+      spreadsheetId: sheetId,
+      range: `'${ERROR_LOG_SHEET}'!A1`,
+      valueInputOption: "RAW",
+      insertDataOption: "INSERT_ROWS",
+      requestBody: {
+        values: [[
+          new Date().toISOString(),
+          service || "",
+          messageId || "",
+          sender || "",
+          subject || "",
+          attachment || "",
+          error || "",
+        ]],
+      },
+    })
+  );
+  _sheetsWriteQueue = task.then(
+    () => {},
+    (e) => console.error("Error Log append failed:", e.message)
+  );
+  return task;
+}
+
 export function appendReceiptRow(sheetId, rowValues) {
   const task = _sheetsWriteQueue.then(() =>
     getSheets().spreadsheets.values.append({
@@ -59,27 +89,59 @@ export function appendReceiptRow(sheetId, rowValues) {
   return task;
 }
 
+// ── SLACK INTAKE CURSOR ───────────────────────────────────────────────────────
+// "Slack Intake State" tab: a single data cell (A2) holding the Slack message
+// timestamp of the last-processed message. Slack timestamps are strings like
+// "1234567890.123456" — stored as-is, compared as strings (lexicographic order
+// works because they're zero-padded Unix seconds with a fixed-width decimal).
+const SLACK_INTAKE_TAB = "Slack Intake State";
+
+export async function getSlackIntakeCursor(sheetId) {
+  const res = await getSheets().spreadsheets.values.get({
+    spreadsheetId: sheetId,
+    range: `'${SLACK_INTAKE_TAB}'!A2`,
+  });
+  return (res.data.values || [])[0]?.[0] || "";
+}
+
+export function setSlackIntakeCursor(sheetId, ts) {
+  const task = _sheetsWriteQueue.then(() =>
+    getSheets().spreadsheets.values.update({
+      spreadsheetId: sheetId,
+      range: `'${SLACK_INTAKE_TAB}'!A2`,
+      valueInputOption: "RAW",
+      requestBody: { values: [[ts]] },
+    })
+  );
+  _sheetsWriteQueue = task.then(
+    () => {},
+    (e) => console.error("Slack cursor write error:", e.message)
+  );
+  return task;
+}
+
 // Column order per Master Doc §4:
 // Captured at · Source · Expense type · Date · Currency · Amount · Paid by ·
 // Credit card · Cardholder · Provider · Receipt No. · Comments · Invoice link ·
-// Status · Matched Amex txn
-export function buildReceiptRow({ parsed, sourceEmail, invoiceLink }) {
+// Status · Matched Amex txn · Document type
+export function buildReceiptRow({ parsed, sourceEmail, invoiceLink, cardholder = "" }) {
   const cell = (v) => (v === null || v === undefined ? "" : v);
   return [
-    new Date().toISOString(),        // Captured at
-    cell(sourceEmail),               // Source
-    cell(parsed.expense_type),       // Expense type
-    cell(parsed.date),               // Date
-    cell(parsed.currency),           // Currency
-    cell(parsed.amount),             // Amount
-    cell(parsed.suggested_paid_by),  // Paid by
-    "",                              // Credit card (not derivable from receipt)
-    "",                              // Cardholder (not derivable from receipt)
-    cell(parsed.provider),           // Provider
-    cell(parsed.receipt_no),         // Receipt No.
-    cell(parsed.notes),              // Comments
-    cell(invoiceLink),               // Invoice link
-    "Pending",                       // Status
-    "",                              // Matched Amex txn
+    new Date().toISOString(),        // A: Captured at
+    cell(sourceEmail),               // B: Source
+    cell(parsed.expense_type),       // C: Expense type
+    cell(parsed.date),               // D: Date
+    cell(parsed.currency),           // E: Currency
+    cell(parsed.amount),             // F: Amount
+    cell(parsed.suggested_paid_by),  // G: Paid by
+    "",                              // H: Credit card (not derivable from receipt)
+    cell(cardholder),                // I: Cardholder
+    cell(parsed.provider),           // J: Provider
+    cell(parsed.receipt_no),         // K: Receipt No.
+    cell(parsed.notes),              // L: Comments
+    cell(invoiceLink),               // M: Invoice link
+    "Pending",                       // N: Status
+    "",                              // O: Matched Amex txn
+    cell(parsed.document_type),      // P: Document type (receipt / invoice / other)
   ];
 }
