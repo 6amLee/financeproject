@@ -93,24 +93,25 @@ export function setSlackIntakeCursor(sheetId, ts) {
 // Column order per Master Doc §4:
 // Captured at · Source · Expense type · Date · Currency · Amount · Paid by ·
 // Credit card · Cardholder · Provider · Receipt No. · Comments · Invoice link ·
-// Status · Matched Amex txn
+// Status · Matched Amex txn · Document type
 export function buildReceiptRow({ parsed, sourceEmail, invoiceLink, cardholder = "" }) {
   const cell = (v) => (v === null || v === undefined ? "" : v);
   return [
-    new Date().toISOString(),        // Captured at
-    cell(sourceEmail),               // Source
-    cell(parsed.expense_type),       // Expense type
-    cell(parsed.date),               // Date
-    cell(parsed.currency),           // Currency
-    cell(parsed.amount),             // Amount
-    cell(parsed.suggested_paid_by),  // Paid by
-    "",                              // Credit card (not derivable from receipt)
-    cell(cardholder),                // Cardholder
-    cell(parsed.provider),           // Provider
-    cell(parsed.receipt_no),         // Receipt No.
-    cell(parsed.notes),              // Comments
-    cell(invoiceLink),               // Invoice link
-    "Pending",                       // Status
-    "",                              // Matched Amex txn
+    new Date().toISOString(),        // A: Captured at
+    cell(sourceEmail),               // B: Source
+    cell(parsed.expense_type),       // C: Expense type
+    cell(parsed.date),               // D: Date
+    cell(parsed.currency),           // E: Currency
+    cell(parsed.amount),             // F: Amount
+    cell(parsed.suggested_paid_by),  // G: Paid by
+    "",                              // H: Credit card (not derivable from receipt)
+    cell(cardholder),                // I: Cardholder
+    cell(parsed.provider),           // J: Provider
+    cell(parsed.receipt_no),         // K: Receipt No.
+    cell(parsed.notes),              // L: Comments
+    cell(invoiceLink),               // M: Invoice link
+    "Pending",                       // N: Status
+    "",                              // O: Matched Amex txn
+    cell(parsed.document_type),      // P: Document type (receipt / invoice / other)
   ];
 }

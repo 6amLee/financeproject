@@ -127,7 +127,7 @@ async function processSlackFile({ file, userName, messageText, existingReceiptNu
   if (receiptNo) existingReceiptNumbers.add(receiptNo);
   console.log(
     `Added row: ${parsed.provider} · ${parsed.amount} ${parsed.currency} · ` +
-    `receipt ${receiptNo || "(none)"} · submitted by ${userName}` +
+    `${parsed.document_type || "receipt"} ${receiptNo || "(none)"} · submitted by ${userName}` +
     (cardholder ? " [employee expense]" : "")
   );
 }
