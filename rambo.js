@@ -29,6 +29,7 @@ import {
   sendChaseNudges,
 } from "./src/rambo/chase.js";
 import { readTabRows } from "./src/sheets.js";
+import { resolveSlackId } from "./src/rambo/slackIds.js";
 
 // Load .env for local runs if this Node version supports it (20.12+).
 // On Railway env vars are injected directly, so this is best-effort.
@@ -77,34 +78,7 @@ async function fetchStatementGrid() {
   return null;
 }
 
-// ── NAME → SLACK ID ───────────────────────────────────────────────────────────
-// Static map, looked up once via Slack's user search for everyone across all
-// four escalation lists (Potential Owners, Managers, Roee+Yulia). Two names
-// ("Gal", "Nadav") had more than one Slack match — confirmed with Lee which
-// account is correct before adding them here. Falls back to null (warn +
-// skip, never guess) for anyone not in this map, e.g. a name typo'd on the
-// Vendor Ownership sheet or a future hire not yet added below.
-const SLACK_ID_BY_NAME = {
-  Ron: "U05KWG707DG",
-  Roee: "U057W53SUEN",
-  Elad: "U064M72MVFS",
-  Lee: "U06LG6L3E1H",
-  Marco: "U06AERTAPR6",
-  Diana: "U06TWLVF1R6",
-  Aviad: "U05QEAJDK09",
-  Aviv: "U05820C9SSV",
-  Richard: "U088RRKVDGT",
-  Olivia: "U06231ZUM0S",
-  Bruni: "U09R1PHQMGC",
-  Rafael: "U06SLH4C0CA",
-  Gal: "U06PZV5K6LC",
-  Nadav: "U07L3GS96KE",
-  Yulia: "U088YU5HD4H",
-};
-
-function resolveSlackId(name) {
-  return SLACK_ID_BY_NAME[name] ?? null;
-}
+// resolveSlackId is imported from src/rambo/slackIds.js (single source of truth).
 
 // Persist a chase state row: append when new, in-place update otherwise.
 // Under --dry-run nothing is written — persisted state must stay untouched so

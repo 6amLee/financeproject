@@ -6,12 +6,13 @@
     "node": ">=18.0.0"
   },
   "scripts": {
-    "start": "node index.js & node rambo.js & node slackIntake.js & wait",
+    "start": "node index.js & node rambo.js & node slackIntake.js & node statementRambo.js & wait",
     "test": "vitest run",
     "test:watch": "vitest"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
+    "exceljs": "^4.4.0",
     "googleapis": "^173.0.0"
   },
   "devDependencies": {

@@ -120,6 +120,25 @@ export function setSlackIntakeCursor(sheetId, ts) {
   return task;
 }
 
+// Update the Status column (N, index 13) of a specific Master DB row.
+// rowNumber is 1-based (as returned by getStatementChaseThreads / any Sheet read).
+// Used by the statement intake DM flow when a receipt is matched to a charge.
+export function setReceiptStatus(sheetId, rowNumber, status) {
+  const task = _sheetsWriteQueue.then(() =>
+    getSheets().spreadsheets.values.update({
+      spreadsheetId: sheetId,
+      range: `'${SHEET_NAME}'!N${rowNumber}`,
+      valueInputOption: "RAW",
+      requestBody: { values: [[status]] },
+    })
+  );
+  _sheetsWriteQueue = task.then(
+    () => {},
+    (e) => console.error("Status update error:", e.message)
+  );
+  return task;
+}
+
 // Known company cards — last 4 digits → card type + cardholder.
 // If the receipt shows one of these, paid_by is forced to Organization and
 // the credit card column is populated automatically.

@@ -11,6 +11,17 @@ function getDrive() {
   return _drive;
 }
 
+// Download a Drive file by ID and return it as a base64 string.
+// Used by statementRambo.js to re-load the original statement Excel for
+// re-matching and coloring without keeping it in memory between poll cycles.
+export async function downloadDriveFile(fileId) {
+  const res = await getDrive().files.get(
+    { fileId, alt: "media" },
+    { responseType: "arraybuffer" }
+  );
+  return Buffer.from(res.data).toString("base64");
+}
+
 export async function uploadToDrive({ filename, mimeType, base64Data, folderId }) {
   const res = await getDrive().files.create({
     requestBody: {

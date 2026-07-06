@@ -14,14 +14,24 @@ import crypto from "crypto";
 import { getChannelHistory, downloadSlackFile, getSlackUserName, slackPost } from "./src/slackIntake.js";
 import { extractReceiptData } from "./src/claude.js";
 import { parseClaudeJson } from "./src/parseJson.js";
-import { uploadToDrive } from "./src/drive.js";
+import { uploadToDrive, downloadDriveFile } from "./src/drive.js";
 import {
   appendReceiptRow,
   buildReceiptRow,
   appendErrorRow,
   getSlackIntakeCursor,
   setSlackIntakeCursor,
+  setReceiptStatus,
 } from "./src/sheets.js";
+import {
+  runStatementComparison,
+  buildPendingCharge,
+  formatCharge,
+  matchReceiptToPendingCharge,
+} from "./src/statementIntake.js";
+import { appendStatementChaseThread, getStatementChaseThreads, updateStatementChaseThread } from "./src/rambo/statementChase.js";
+import { appendStatementRun } from "./src/rambo/statementRuns.js";
+import { resolveSlackId } from "./src/rambo/slackIds.js";
 
 if (typeof process.loadEnvFile === "function") {
   try { process.loadEnvFile(); } catch { /* no .env file — fine */ }
@@ -45,7 +55,8 @@ const DRIVE_FOLDER_ID   = process.env.GOOGLE_DRIVE_FOLDER_ID || "";
 const SLACK_TOKEN       = process.env.SLACK_BOT_TOKEN;
 const CHANNEL_ID        = process.env.SLACK_INTAKE_CHANNEL;
 const SIGNING_SECRET    = process.env.SLACK_SIGNING_SECRET || "";
-const POLL_INTERVAL_MIN = Number(process.env.SLACK_INTAKE_POLL_MINUTES) || 5;
+const POLL_INTERVAL_MIN   = Number(process.env.SLACK_INTAKE_POLL_MINUTES) || 5;
+const STATEMENTS_CHANNEL  = process.env.SLACK_STATEMENTS_CHANNEL || "";
 
 const SUPPORTED_MIME_TYPES = new Set([
   "application/pdf",
@@ -135,6 +146,41 @@ function selectInput(blockId, label, options, initial, placeholder) {
   };
 }
 
+function buildConfirmView({ parsed, meta }) {
+  const p = parsed || {};
+  const ccLabel = CC_OPTIONS.find((o) => o.value === p.cc_last4)?.text?.text || p.cc_last4 || null;
+  const lines = [
+    `*Provider:* ${p.provider || "—"}`,
+    `*Date of Purchase:* ${p.date || "—"}`,
+    `*Amount:* ${p.amount ? `${p.amount} ${p.currency || ""}`.trim() : "—"}`,
+    `*Expense Type:* ${p.expense_type || "—"}`,
+    `*Paid By:* ${p.paid_by || "—"}`,
+    ...(p.paid_by === "Organization" ? [`*Credit Card:* ${ccLabel || "—"}`] : []),
+    ...(p.receipt_no ? [`*Receipt / Invoice #:* ${p.receipt_no}`] : []),
+    ...(p.notes ? [`*Notes:* ${p.notes}`] : []),
+    ...(meta?.invoiceLink ? [`*Document:* <${meta.invoiceLink}|View in Drive>`] : []),
+  ];
+  return {
+    type: "modal",
+    callback_id: "receipt_confirm",
+    title: { type: "plain_text", text: "Confirm Receipt" },
+    submit: { type: "plain_text", text: "Confirm & Submit" },
+    close: { type: "plain_text", text: "Back" },
+    private_metadata: JSON.stringify({ parsed: p, meta: meta || {} }),
+    blocks: [
+      {
+        type: "section",
+        text: { type: "mrkdwn", text: "Please review the details below, then confirm or go back to edit." },
+      },
+      { type: "divider" },
+      {
+        type: "section",
+        text: { type: "mrkdwn", text: lines.join("\n") },
+      },
+    ],
+  };
+}
+
 function buildModal({ prepped, meta }) {
   const p = prepped || {};
   // CC field is hidden when the submitter is paying personally — no company card involved.
@@ -194,7 +240,9 @@ function buildModal({ prepped, meta }) {
 // ── HTTP SERVER ───────────────────────────────────────────────────────────────
 
 const server = http.createServer((req, res) => {
-  if (req.method !== "POST" || req.url !== "/slack/interactions") {
+  const isInteractions = req.url === "/slack/interactions";
+  const isEvents       = req.url === "/slack/events";
+  if (req.method !== "POST" || (!isInteractions && !isEvents)) {
     res.writeHead(404); res.end(); return;
   }
 
@@ -202,7 +250,7 @@ const server = http.createServer((req, res) => {
   req.on("data", (c) => chunks.push(c));
   req.on("end", async () => {
     const rawBody = Buffer.concat(chunks).toString();
-    console.log(`Slack interaction received: ${req.method} ${req.url} (${rawBody.length} bytes)`);
+    console.log(`Slack request received: ${req.method} ${req.url} (${rawBody.length} bytes)`);
 
     if (!verifySlackRequest(
       rawBody,
@@ -213,6 +261,35 @@ const server = http.createServer((req, res) => {
       res.writeHead(403); res.end("Forbidden"); return;
     }
 
+    // ── Events API ──────────────────────────────────────────────────────────
+    if (isEvents) {
+      let event;
+      try { event = JSON.parse(rawBody); } catch {
+        res.writeHead(400); res.end(); return;
+      }
+      if (event.type === "url_verification") {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ challenge: event.challenge }));
+        return;
+      }
+      if (event.type === "event_callback") {
+        res.writeHead(200); res.end();
+        const ev = event.event;
+        if (ev?.files?.length) {
+          const isStatements = STATEMENTS_CHANNEL && ev.channel === STATEMENTS_CHANNEL;
+          const isDm         = !isStatements && ev.channel?.startsWith("D");
+          const handler      = isStatements ? handleStatementUpload
+                             : isDm        ? handleDmReceipt
+                             :               handleIncomingMessage;
+          handler(ev).catch((e) => console.error("Event handler error:", e.message));
+        }
+        return;
+      }
+      res.writeHead(200); res.end();
+      return;
+    }
+
+    // ── Interactions ─────────────────────────────────────────────────────────
     let payload;
     try {
       payload = JSON.parse(new URLSearchParams(rawBody).get("payload") || "{}");
@@ -263,6 +340,10 @@ const server = http.createServer((req, res) => {
 
       if (payload.type === "view_submission" && payload.view?.callback_id === "receipt_form") {
         const vals = payload.view.state.values;
+        const pick = (blockId) => {
+          const b = vals[blockId]?.val;
+          return b?.value ?? b?.selected_option?.value ?? b?.selected_date ?? null;
+        };
         const paidBy = vals.paid_by?.val?.selected_option?.value;
         const cc    = vals.cc_last4?.val?.selected_option?.value;
 
@@ -276,11 +357,34 @@ const server = http.createServer((req, res) => {
           return;
         }
 
-        // Valid — ack immediately, write to sheet in background.
+        // Push confirmation view — user reviews and clicks "Confirm & Submit" or "Back".
+        const meta = JSON.parse(payload.view.private_metadata || "{}");
+        const parsed = {
+          provider:     pick("provider"),
+          date:         pick("date"),
+          amount:       pick("amount"),
+          currency:     pick("currency"),
+          expense_type: pick("expense_type"),
+          paid_by:      paidBy,
+          cc_last4:     cc || null,
+          receipt_no:   pick("receipt_no") || null,
+          notes:        pick("notes") || null,
+        };
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({
+          response_action: "push",
+          view: buildConfirmView({ parsed, meta }),
+        }));
+        return;
+      }
+
+      if (payload.type === "view_submission" && payload.view?.callback_id === "receipt_confirm") {
+        // User confirmed — ack immediately and write to sheet in background.
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ response_action: "clear" }));
-        handleFormSubmission(payload).catch((e) =>
-          console.error("Form submission error:", e.message)
+        const { parsed, meta } = JSON.parse(payload.view.private_metadata || "{}");
+        writeReceiptToSheet({ parsed, meta }).catch((e) =>
+          console.error("Receipt confirm error:", e.message)
         );
         return;
       }
@@ -296,45 +400,27 @@ server.listen(process.env.PORT || 3000, () => {
   console.log(`Slack interactions server listening on port ${process.env.PORT || 3000}`);
 });
 
-// ── FORM SUBMISSION ───────────────────────────────────────────────────────────
+// ── SHEET WRITE ───────────────────────────────────────────────────────────────
 
-async function handleFormSubmission(payload) {
-  const vals = payload.view.state.values;
-  const meta = JSON.parse(payload.view.private_metadata || "{}");
-
-  const pick = (blockId) => {
-    const b = vals[blockId]?.val;
-    return b?.value ?? b?.selected_option?.value ?? b?.selected_date ?? null;
-  };
-
-  const paid_by = pick("paid_by");
-  const parsed = {
-    is_receipt: true,
-    document_type: "receipt",
-    provider:          pick("provider"),
-    date:              pick("date"),
-    amount:            pick("amount"),
-    currency:          pick("currency"),
-    expense_type:      pick("expense_type"),
-    suggested_paid_by: paid_by,
-    cc_last4:          pick("cc_last4") || null,
-    receipt_no:        pick("receipt_no") || null,
-    notes:             pick("notes") || null,
-  };
-
-  const cardholder = paid_by === "Employee" ? (meta.userName || "") : "";
+async function writeReceiptToSheet({ parsed, meta }) {
+  const cardholder = parsed.paid_by === "Employee" ? (meta.userName || "") : "";
 
   await appendReceiptRow(
     SHEETS_ID,
     buildReceiptRow({
-      parsed,
+      parsed: {
+        is_receipt: true,
+        document_type: "receipt",
+        suggested_paid_by: parsed.paid_by,
+        ...parsed,
+      },
       sourceEmail: `slack:${meta.userName || "unknown"}`,
       invoiceLink: meta.invoiceLink || "",
       cardholder,
     })
   );
 
-  console.log(`Modal submitted: ${parsed.provider} · ${parsed.amount} ${parsed.currency} by ${meta.userName}`);
+  console.log(`Receipt submitted: ${parsed.provider} · ${parsed.amount} ${parsed.currency} by ${meta.userName}`);
 
   try {
     await slackApi("chat.postMessage", {
@@ -344,6 +430,296 @@ async function handleFormSubmission(payload) {
     });
   } catch (e) {
     console.warn("Confirmation message failed:", e.message);
+  }
+}
+
+// ── STATEMENT UPLOAD HANDLER ─────────────────────────────────────────────────
+
+async function handleStatementUpload(msg) {
+  const files = msg.files || [];
+  const excelFile = files.find((f) =>
+    f.name?.endsWith(".xlsx") || f.name?.endsWith(".xls") ||
+    (f.mimetype || "").includes("spreadsheet") || (f.mimetype || "").includes("excel")
+  );
+  if (!excelFile) {
+    console.log("Statement upload: no Excel file found — ignoring.");
+    return;
+  }
+
+  const uploaderName = msg.user ? await getSlackUserName(SLACK_TOKEN, msg.user) : "unknown";
+  console.log(`Statement upload from ${uploaderName}: ${excelFile.name}`);
+
+  let base64Data;
+  try {
+    base64Data = await downloadSlackFile(SLACK_TOKEN, excelFile.url_private);
+  } catch (e) {
+    console.error(`Failed to download statement: ${e.message}`);
+    await slackApi("chat.postMessage", {
+      channel: STATEMENTS_CHANNEL,
+      thread_ts: msg.ts,
+      text: `❌ Couldn't download "${excelFile.name}" — please try uploading again.`,
+    }).catch(() => {});
+    return;
+  }
+
+  // Upload to Drive so the nudge cycle can re-download for colored output.
+  let driveFileId = null;
+  try {
+    const webViewLink = await uploadToDrive({
+      filename: excelFile.name,
+      mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      base64Data,
+      folderId: DRIVE_FOLDER_ID,
+    });
+    const match = webViewLink.match(/\/d\/([^/]+)/);
+    driveFileId = match?.[1] ?? null;
+  } catch (e) {
+    console.warn(`Statement Drive upload failed: ${e.message}`);
+  }
+
+  let comparison;
+  try {
+    comparison = await runStatementComparison({ base64Data, sheetsId: SHEETS_ID });
+  } catch (e) {
+    console.error(`Statement comparison failed: ${e.message}`);
+    await slackApi("chat.postMessage", {
+      channel: STATEMENTS_CHANNEL,
+      thread_ts: msg.ts,
+      text: `❌ Failed to process the statement: ${e.message}`,
+    }).catch(() => {});
+    return;
+  }
+
+  const runId = `run_${Date.now()}`;
+  await appendStatementRun(SHEETS_ID, {
+    runId,
+    channelId:   STATEMENTS_CHANNEL,
+    messageTs:   msg.ts,
+    driveFileId: driveFileId || "",
+    startedAt:   new Date().toISOString(),
+    status:      "active",
+  });
+
+  const { byOwner } = comparison;
+  let dmCount = 0;
+  for (const [ownerName, items] of byOwner) {
+    const slackId = resolveSlackId(ownerName);
+    if (!slackId) {
+      console.warn(`No Slack ID for owner "${ownerName}" — skipping DM.`);
+      continue;
+    }
+
+    const pendingCharges = [];
+    for (const { cluster, pendingTxns } of items) {
+      for (const txn of pendingTxns) {
+        pendingCharges.push(buildPendingCharge(txn, cluster.key));
+      }
+    }
+    if (!pendingCharges.length) continue;
+
+    const chargeList = pendingCharges.map((c, i) => `${i + 1}. ${formatCharge(c)}`).join("\n");
+    const stage1Text =
+      `Hi ${ownerName} 👋 Yulia has uploaded the latest bank statement and I found ` +
+      `*${pendingCharges.length} charge(s)* that don't yet have a matching receipt on file:\n\n` +
+      `${chargeList}\n\n` +
+      `If any of these are yours, drop the receipt(s) right here in this chat — one at a time. ` +
+      `I'll match them automatically.`;
+
+    try {
+      const conv     = await slackApi("conversations.open", { users: slackId });
+      const dmChanId = conv.channel.id;
+      const dmResult = await slackApi("chat.postMessage", { channel: dmChanId, text: stage1Text });
+      const threadTs = dmResult.message?.ts || dmResult.ts;
+
+      await appendStatementChaseThread(SHEETS_ID, {
+        runId,
+        userName:      ownerName,
+        userId:        slackId,
+        dmChannelId:   dmChanId,
+        threadTs,
+        nudgeCount:    1,
+        lastNudgeAt:   new Date().toISOString(),
+        pendingCharges,
+        resolved:      false,
+      });
+
+      dmCount++;
+      console.log(`Stage 1 DM sent to ${ownerName} (${pendingCharges.length} charges).`);
+    } catch (e) {
+      console.error(`Failed to DM ${ownerName}: ${e.message}`);
+    }
+  }
+
+  await slackApi("chat.postMessage", {
+    channel: STATEMENTS_CHANNEL,
+    thread_ts: msg.ts,
+    text:
+      `✅ Statement processed: *${comparison.totalCharges}* total charges, ` +
+      `*${comparison.matchedCount}* already matched, ` +
+      `*${comparison.unmatchedCount}* unaccounted. ` +
+      `DMs sent to *${dmCount}* person(s). ` +
+      `I'll follow up automatically if charges remain open.`,
+  }).catch(() => {});
+}
+
+// ── DM RECEIPT HANDLER ────────────────────────────────────────────────────────
+
+async function handleDmReceipt(msg) {
+  const files = msg.files || [];
+  if (!files.length || !msg.thread_ts) return;
+
+  let allThreads;
+  try {
+    allThreads = await getStatementChaseThreads(SHEETS_ID);
+  } catch (e) {
+    console.error(`handleDmReceipt: could not load chase threads: ${e.message}`);
+    return;
+  }
+
+  const thread = allThreads.find(
+    (t) => t.dmChannelId === msg.channel && t.threadTs === msg.thread_ts && !t.resolved
+  );
+  if (!thread) return; // not a statement chase thread — ignore
+
+  const file     = files[0];
+  const mimeType = normaliseMime(file.mimetype);
+  if (!SUPPORTED_MIME_TYPES.has(mimeType)) {
+    await slackApi("chat.postMessage", {
+      channel:   msg.channel,
+      thread_ts: msg.thread_ts,
+      text: `I can't read that file type (${file.mimetype || "unknown"}). Please send a PDF or image.`,
+    }).catch(() => {});
+    return;
+  }
+
+  let base64Data;
+  try {
+    base64Data = await downloadSlackFile(SLACK_TOKEN, file.url_private);
+  } catch (e) {
+    console.error(`DM receipt download failed: ${e.message}`);
+    return;
+  }
+
+  let invoiceLink = "";
+  try {
+    invoiceLink = await uploadToDrive({ filename: file.name, mimeType, base64Data, folderId: DRIVE_FOLDER_ID });
+  } catch (e) {
+    console.warn(`DM receipt Drive upload failed: ${e.message}`);
+  }
+
+  let extracted = null;
+  try {
+    const context = `Receipt submitted by ${thread.userName} to resolve an outstanding charge.`;
+    const rawText = await extractReceiptData({ mimeType, base64Data, context });
+    extracted = parseClaudeJson(rawText);
+  } catch (e) {
+    console.warn(`DM receipt extraction failed: ${e.message}`);
+  }
+
+  if (!extracted) {
+    await slackApi("chat.postMessage", {
+      channel:   msg.channel,
+      thread_ts: msg.thread_ts,
+      text: `I had trouble reading that receipt. Could you send a clearer version?`,
+    }).catch(() => {});
+    return;
+  }
+
+  const matched = matchReceiptToPendingCharge(extracted, thread.pendingCharges);
+  if (!matched) {
+    const chargeList = thread.pendingCharges.map((c, i) => `${i + 1}. ${formatCharge(c)}`).join("\n");
+    await slackApi("chat.postMessage", {
+      channel:   msg.channel,
+      thread_ts: msg.thread_ts,
+      text:
+        `I couldn't match that receipt to any of your outstanding charges.\n` +
+        `Please double-check the amount and merchant name. Outstanding charges:\n` +
+        chargeList,
+    }).catch(() => {});
+    return;
+  }
+
+  // Write to Master DB with Status = "Matched" from the start.
+  const rowValues = buildReceiptRow({
+    parsed: {
+      is_receipt:        true,
+      document_type:     "receipt",
+      suggested_paid_by: extracted.suggested_paid_by ?? "Organization",
+      ...extracted,
+    },
+    sourceEmail: `slack-dm:${thread.userName}`,
+    invoiceLink,
+    cardholder: thread.userName,
+  });
+  rowValues[13] = "Matched"; // N column — override default "Pending"
+  await appendReceiptRow(SHEETS_ID, rowValues);
+
+  const remaining   = thread.pendingCharges.filter((c) => c.clusterKey !== matched.clusterKey);
+  const allResolved = remaining.length === 0;
+
+  await updateStatementChaseThread(SHEETS_ID, thread.rowNumber, {
+    ...thread,
+    pendingCharges: remaining,
+    resolved:       allResolved,
+  });
+
+  await slackApi("chat.postMessage", {
+    channel:   msg.channel,
+    thread_ts: msg.thread_ts,
+    text:
+      `✅ Matched to *${formatCharge(matched)}* and logged.\n` +
+      (allResolved
+        ? `You're all clear! All your outstanding charges are now accounted for. 🎉`
+        : `*${remaining.length}* charge(s) still outstanding:\n` +
+          remaining.map((c, i) => `${i + 1}. ${formatCharge(c)}`).join("\n")),
+  }).catch(() => {});
+}
+
+// ── MESSAGE HANDLER (shared by Events API and poll) ───────────────────────────
+
+// Tracks message timestamps we've already processed so the poll fallback
+// doesn't double-post the button when the Events API already handled it.
+const recentlyProcessed = new Set();
+
+async function handleIncomingMessage(msg) {
+  const files = msg.files || [];
+  if (!files.length) return;
+
+  if (files.length > 1) {
+    await slackApi("chat.postMessage", {
+      channel: msg.channel || CHANNEL_ID,
+      thread_ts: msg.ts,
+      text:
+        `Whoa! 📎 ${files.length} attachments at once? Bold strategy.\n\n` +
+        `I work one receipt at a time — please re-upload each receipt as a *separate message*. ` +
+        `I'll be right here waiting. Promise. 🤌`,
+    }).catch(() => {});
+    return;
+  }
+
+  if (recentlyProcessed.has(msg.ts)) {
+    console.log(`Skipping already-processed message ${msg.ts}`);
+    return;
+  }
+  recentlyProcessed.add(msg.ts);
+  // Trim the set to avoid unbounded growth across a long-running process.
+  if (recentlyProcessed.size > 500) {
+    recentlyProcessed.delete(recentlyProcessed.values().next().value);
+  }
+
+  const userName = msg.user ? await getSlackUserName(SLACK_TOKEN, msg.user) : "unknown";
+  for (const file of files) {
+    try {
+      await processSlackFile({ file, msg, userName });
+    } catch (e) {
+      console.error(`Error processing "${file.name}" from ${userName}:`, e.message);
+      appendErrorRow(SHEETS_ID, {
+        service: "slack-intake",
+        sender: userName,
+        attachment: file.name,
+        error: e.message,
+      }).catch(() => {});
+    }
   }
 }
 
@@ -448,23 +824,7 @@ async function pollCycle() {
     }
 
     for (const msg of ordered) {
-      const files = msg.files || [];
-      const userName = msg.user ? await getSlackUserName(SLACK_TOKEN, msg.user) : "unknown";
-
-      for (const file of files) {
-        try {
-          await processSlackFile({ file, msg, userName });
-        } catch (e) {
-          console.error(`Error processing "${file.name}" from ${userName}:`, e.message);
-          appendErrorRow(SHEETS_ID, {
-            service: "slack-intake",
-            sender: userName,
-            attachment: file.name,
-            error: e.message,
-          }).catch(() => {});
-        }
-      }
-
+      await handleIncomingMessage(msg);       // no-op if already handled by Events API
       await setSlackIntakeCursor(SHEETS_ID, msg.ts);
     }
 
