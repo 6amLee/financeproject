@@ -40,6 +40,36 @@ export async function readTabRows(sheetId, rangeA1) {
 
 let _sheetsWriteQueue = Promise.resolve();
 
+// Error Log tab columns: Logged at · Service · Message ID · Sender · Subject · Attachment · Error
+const ERROR_LOG_SHEET = "Error Log";
+
+export function appendErrorRow(sheetId, { service, messageId, sender, subject, attachment, error }) {
+  const task = _sheetsWriteQueue.then(() =>
+    getSheets().spreadsheets.values.append({
+      spreadsheetId: sheetId,
+      range: `'${ERROR_LOG_SHEET}'!A1`,
+      valueInputOption: "RAW",
+      insertDataOption: "INSERT_ROWS",
+      requestBody: {
+        values: [[
+          new Date().toISOString(),
+          service || "",
+          messageId || "",
+          sender || "",
+          subject || "",
+          attachment || "",
+          error || "",
+        ]],
+      },
+    })
+  );
+  _sheetsWriteQueue = task.then(
+    () => {},
+    (e) => console.error("Error Log append failed:", e.message)
+  );
+  return task;
+}
+
 export function appendReceiptRow(sheetId, rowValues) {
   const task = _sheetsWriteQueue.then(() =>
     getSheets().spreadsheets.values.append({
