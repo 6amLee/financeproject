@@ -84,6 +84,14 @@ function verifySlackRequest(rawBody, timestamp, signature) {
 
 // ── MODAL BUILDER ─────────────────────────────────────────────────────────────
 
+const CC_OPTIONS = [
+  opt("4154", "4154 — Amex (Roee)"),
+  opt("9037", "9037 — Amex (Ron)"),
+  opt("4287", "4287 — Amex"),
+  opt("5438", "5438 — Visa (Roee)"),
+  opt("0375", "0375 — Visa (Ron)"),
+];
+
 const EXPENSE_TYPES = [
   "Advertising", "Business meetings", "Company event", "Computer maintenance",
   "Gas", "Gifts for Employees", "Gifts for partners", "Office equipment",
@@ -141,7 +149,7 @@ function buildModal({ prepped, meta }) {
       {
         type: "input",
         block_id: "date",
-        label: { type: "plain_text", text: "Date" },
+        label: { type: "plain_text", text: "Date of Purchase / Date of Charge" },
         element: {
           type: "datepicker",
           action_id: "val",
@@ -162,7 +170,9 @@ function buildModal({ prepped, meta }) {
         [opt("Organization"), opt("Employee")],
         p.paid_by, "Select"
       ),
-      textInput("cc_last4", "Credit Card Last 4 (optional)", p.cc_last4, "e.g. 5438", true),
+      selectInput("cc_last4", "Credit Card (required for organization expenses)",
+        CC_OPTIONS, p.cc_last4, "Select card"
+      ),
       textInput("receipt_no", "Receipt / Invoice # (optional)", p.receipt_no, "as printed on document", true),
       textInput("notes", "Notes (optional)", p.notes, "Any additional context", true, true),
     ],
@@ -216,7 +226,21 @@ const server = http.createServer((req, res) => {
       }
 
       if (payload.type === "view_submission" && payload.view?.callback_id === "receipt_form") {
-        // Must respond within 3s — ack immediately, process in background.
+        const vals = payload.view.state.values;
+        const paidBy = vals.paid_by?.val?.selected_option?.value;
+        const cc    = vals.cc_last4?.val?.selected_option?.value;
+
+        // Validate: Organization expense requires a credit card selection.
+        if (paidBy === "Organization" && !cc) {
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({
+            response_action: "errors",
+            errors: { cc_last4: "Required for organization expenses — select the card used" },
+          }));
+          return;
+        }
+
+        // Valid — ack immediately, write to sheet in background.
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ response_action: "clear" }));
         handleFormSubmission(payload).catch((e) =>
