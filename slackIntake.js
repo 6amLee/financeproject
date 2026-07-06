@@ -1,29 +1,21 @@
 // ── SLACK RECEIPT INTAKE ──────────────────────────────────────────────────────
-// Polls a designated Slack channel for receipt file uploads from employees.
-// Complements the Gmail intake (index.js): employees can drop a receipt image
-// or PDF directly into the channel instead of emailing finance@.
+// Polls a designated Slack channel for receipt file uploads. When a file is
+// detected, Claude attempts extraction and the bot posts a "Fill in details"
+// button as a thread reply. Clicking the button opens a pre-filled modal —
+// the user confirms or corrects the fields and submits, which writes the row.
 //
-// Two expense types are handled transparently:
-//   - Employee expense (paid personally, needs reimbursement): Claude determines
-//     suggested_paid_by from the receipt content; if the employee's message
-//     text contains reimbursement hints ("personal", "mine", "reimburse"),
-//     that is passed to Claude as context. The submitter's name fills the
-//     Cardholder column so Finance knows who to pay back.
-//   - Organization expense (employee forwarding a company-card receipt):
-//     Claude returns suggested_paid_by = "Organization"; Cardholder is blank.
-//
-// Cursor: the Slack timestamp of the last-processed message is stored in the
-// "Slack Intake State" tab (cell A2). On first run (no cursor) defaults to 24h
-// ago so stale channel history is not replayed.
-//
-// Run with --once for a single cycle (local testing).
+// Also runs an HTTP server (process.env.PORT) that Slack calls for all
+// interactive payloads (button clicks, modal submissions). Configure in
+// Slack App → Interactivity & Shortcuts → Request URL:
+//   https://<railway-service-url>/slack/interactions
 
-import { getChannelHistory, downloadSlackFile, getSlackUserName } from "./src/slackIntake.js";
+import http from "http";
+import crypto from "crypto";
+import { getChannelHistory, downloadSlackFile, getSlackUserName, slackPost } from "./src/slackIntake.js";
 import { extractReceiptData } from "./src/claude.js";
 import { parseClaudeJson } from "./src/parseJson.js";
 import { uploadToDrive } from "./src/drive.js";
 import {
-  getExistingReceiptNumbers,
   appendReceiptRow,
   buildReceiptRow,
   appendErrorRow,
@@ -48,11 +40,12 @@ if (missingEnv.length > 0) {
   process.exit(1);
 }
 
-const SHEETS_ID = process.env.GOOGLE_SHEETS_ID;
-const DRIVE_FOLDER_ID = process.env.GOOGLE_DRIVE_FOLDER_ID || "";
-const SLACK_TOKEN = process.env.SLACK_BOT_TOKEN;
-const CHANNEL_ID = process.env.SLACK_INTAKE_CHANNEL;
-const POLL_INTERVAL_MINUTES = Number(process.env.SLACK_INTAKE_POLL_MINUTES) || 5;
+const SHEETS_ID         = process.env.GOOGLE_SHEETS_ID;
+const DRIVE_FOLDER_ID   = process.env.GOOGLE_DRIVE_FOLDER_ID || "";
+const SLACK_TOKEN       = process.env.SLACK_BOT_TOKEN;
+const CHANNEL_ID        = process.env.SLACK_INTAKE_CHANNEL;
+const SIGNING_SECRET    = process.env.SLACK_SIGNING_SECRET || "";
+const POLL_INTERVAL_MIN = Number(process.env.SLACK_INTAKE_POLL_MINUTES) || 5;
 
 const SUPPORTED_MIME_TYPES = new Set([
   "application/pdf",
@@ -62,16 +55,235 @@ const SUPPORTED_MIME_TYPES = new Set([
   "image/webp",
 ]);
 
-// Slack's mimetype field uses underscores for some types (e.g. "image_png").
-// Normalise to standard MIME before checking.
 function normaliseMime(slackMime) {
   return slackMime?.replace("_", "/") ?? "";
 }
 
-// Crude check for reimbursement intent in the employee's message text.
 const REIMBURSE_PATTERN = /\b(personal|personally|mine|my own|reimburse|reimbursement|paid myself|i paid)\b/i;
 
-async function processSlackFile({ file, userName, messageText, existingReceiptNumbers }) {
+// ── SLACK API ─────────────────────────────────────────────────────────────────
+
+async function slackApi(method, body) {
+  return slackPost(SLACK_TOKEN, method, body);
+}
+
+// ── SLACK SIGNATURE VERIFICATION ─────────────────────────────────────────────
+
+function verifySlackRequest(rawBody, timestamp, signature) {
+  if (!SIGNING_SECRET) return true; // skip if not configured
+  const age = Math.abs(Date.now() / 1000 - Number(timestamp));
+  if (age > 300) return false;
+  const base = `v0:${timestamp}:${rawBody}`;
+  const computed = "v0=" + crypto.createHmac("sha256", SIGNING_SECRET).update(base).digest("hex");
+  try {
+    return crypto.timingSafeEqual(Buffer.from(computed), Buffer.from(signature));
+  } catch {
+    return false;
+  }
+}
+
+// ── MODAL BUILDER ─────────────────────────────────────────────────────────────
+
+const EXPENSE_TYPES = [
+  "Advertising", "Business meetings", "Company event", "Computer maintenance",
+  "Gas", "Gifts for Employees", "Gifts for partners", "Office equipment",
+  "Other", "Parking", "Professional services", "Refreshments / Snacks",
+  "Taxi/Train/Bus", "Team lunch/ Dinner",
+];
+
+function opt(value, label) {
+  return { text: { type: "plain_text", text: label || value }, value };
+}
+
+function textInput(blockId, label, initial, placeholder, optional = false, multiline = false) {
+  return {
+    type: "input",
+    block_id: blockId,
+    optional,
+    label: { type: "plain_text", text: label },
+    element: {
+      type: "plain_text_input",
+      action_id: "val",
+      multiline,
+      ...(initial != null && initial !== "" ? { initial_value: String(initial) } : {}),
+      ...(placeholder ? { placeholder: { type: "plain_text", text: placeholder } } : {}),
+    },
+  };
+}
+
+function selectInput(blockId, label, options, initial, placeholder) {
+  const initialOpt = initial ? options.find((o) => o.value === initial) : null;
+  return {
+    type: "input",
+    block_id: blockId,
+    label: { type: "plain_text", text: label },
+    element: {
+      type: "static_select",
+      action_id: "val",
+      options,
+      ...(initialOpt ? { initial_option: initialOpt } : {}),
+      ...(placeholder ? { placeholder: { type: "plain_text", text: placeholder } } : {}),
+    },
+  };
+}
+
+function buildModal({ prepped, meta }) {
+  const p = prepped || {};
+  return {
+    type: "modal",
+    callback_id: "receipt_form",
+    title: { type: "plain_text", text: "Receipt Details" },
+    submit: { type: "plain_text", text: "Submit" },
+    close: { type: "plain_text", text: "Cancel" },
+    private_metadata: JSON.stringify(meta || {}),
+    blocks: [
+      textInput("provider", "Provider / Merchant", p.provider, "e.g. Rami Levi, Wolt, Amazon"),
+      {
+        type: "input",
+        block_id: "date",
+        label: { type: "plain_text", text: "Date" },
+        element: {
+          type: "datepicker",
+          action_id: "val",
+          ...(p.date ? { initial_date: p.date } : {}),
+          placeholder: { type: "plain_text", text: "Select date" },
+        },
+      },
+      textInput("amount", "Amount", p.amount, "e.g. 150.00"),
+      selectInput("currency", "Currency",
+        ["ILS", "USD", "EUR"].map((c) => opt(c)),
+        p.currency, "Select currency"
+      ),
+      selectInput("expense_type", "Expense Type",
+        EXPENSE_TYPES.map((e) => opt(e)),
+        p.expense_type, "Select type"
+      ),
+      selectInput("paid_by", "Paid By",
+        [opt("Organization"), opt("Employee")],
+        p.paid_by, "Select"
+      ),
+      textInput("cc_last4", "Credit Card Last 4 (optional)", p.cc_last4, "e.g. 5438", true),
+      textInput("receipt_no", "Receipt / Invoice # (optional)", p.receipt_no, "as printed on document", true),
+      textInput("notes", "Notes (optional)", p.notes, "Any additional context", true, true),
+    ],
+  };
+}
+
+// ── HTTP SERVER ───────────────────────────────────────────────────────────────
+
+const server = http.createServer((req, res) => {
+  if (req.method !== "POST" || req.url !== "/slack/interactions") {
+    res.writeHead(404); res.end(); return;
+  }
+
+  const chunks = [];
+  req.on("data", (c) => chunks.push(c));
+  req.on("end", async () => {
+    const rawBody = Buffer.concat(chunks).toString();
+
+    if (!verifySlackRequest(
+      rawBody,
+      req.headers["x-slack-request-timestamp"] || "",
+      req.headers["x-slack-signature"] || ""
+    )) {
+      res.writeHead(403); res.end("Forbidden"); return;
+    }
+
+    let payload;
+    try {
+      payload = JSON.parse(new URLSearchParams(rawBody).get("payload") || "{}");
+    } catch {
+      res.writeHead(400); res.end(); return;
+    }
+
+    try {
+      if (payload.type === "block_actions") {
+        const action = payload.actions?.[0];
+        if (action?.action_id === "open_receipt_modal") {
+          const data = JSON.parse(action.value);
+          await slackApi("views.open", {
+            trigger_id: payload.trigger_id,
+            view: buildModal(data),
+          });
+        }
+        res.writeHead(200); res.end(); return;
+      }
+
+      if (payload.type === "view_submission" && payload.view?.callback_id === "receipt_form") {
+        // Must respond within 3s — ack immediately, process in background.
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ response_action: "clear" }));
+        handleFormSubmission(payload).catch((e) =>
+          console.error("Form submission error:", e.message)
+        );
+        return;
+      }
+    } catch (e) {
+      console.error("Interaction handler error:", e.message);
+    }
+
+    res.writeHead(200); res.end();
+  });
+});
+
+server.listen(process.env.PORT || 3000, () => {
+  console.log(`Slack interactions server listening on port ${process.env.PORT || 3000}`);
+});
+
+// ── FORM SUBMISSION ───────────────────────────────────────────────────────────
+
+async function handleFormSubmission(payload) {
+  const vals = payload.view.state.values;
+  const meta = JSON.parse(payload.view.private_metadata || "{}");
+
+  const pick = (blockId) => {
+    const b = vals[blockId]?.val;
+    return b?.value ?? b?.selected_option?.value ?? b?.selected_date ?? null;
+  };
+
+  const paid_by = pick("paid_by");
+  const parsed = {
+    is_receipt: true,
+    document_type: "receipt",
+    provider:          pick("provider"),
+    date:              pick("date"),
+    amount:            pick("amount"),
+    currency:          pick("currency"),
+    expense_type:      pick("expense_type"),
+    suggested_paid_by: paid_by,
+    cc_last4:          pick("cc_last4") || null,
+    receipt_no:        pick("receipt_no") || null,
+    notes:             pick("notes") || null,
+  };
+
+  const cardholder = paid_by === "Employee" ? (meta.userName || "") : "";
+
+  await appendReceiptRow(
+    SHEETS_ID,
+    buildReceiptRow({
+      parsed,
+      sourceEmail: `slack:${meta.userName || "unknown"}`,
+      invoiceLink: meta.invoiceLink || "",
+      cardholder,
+    })
+  );
+
+  console.log(`Modal submitted: ${parsed.provider} · ${parsed.amount} ${parsed.currency} by ${meta.userName}`);
+
+  try {
+    await slackApi("chat.postMessage", {
+      channel: meta.channelId,
+      thread_ts: meta.msgTs,
+      text: `✅ Logged: *${parsed.provider || "receipt"}* · ${parsed.amount || "?"} ${parsed.currency || ""}`,
+    });
+  } catch (e) {
+    console.warn("Confirmation message failed:", e.message);
+  }
+}
+
+// ── POLLING LOOP ──────────────────────────────────────────────────────────────
+
+async function processSlackFile({ file, msg, userName }) {
   const mimeType = normaliseMime(file.mimetype);
   if (!SUPPORTED_MIME_TYPES.has(mimeType)) {
     console.warn(`Skipping unsupported file "${file.name}" (${file.mimetype})`);
@@ -80,92 +292,104 @@ async function processSlackFile({ file, userName, messageText, existingReceiptNu
 
   const base64Data = await downloadSlackFile(SLACK_TOKEN, file.url_private);
 
-  const invoiceLink = await uploadToDrive({
-    filename: file.name,
-    mimeType,
-    base64Data,
-    folderId: DRIVE_FOLDER_ID,
+  // Upload to Drive immediately so the link is embedded in the modal.
+  let invoiceLink = "";
+  try {
+    invoiceLink = await uploadToDrive({
+      filename: file.name,
+      mimeType,
+      base64Data,
+      folderId: DRIVE_FOLDER_ID,
+    });
+  } catch (e) {
+    console.warn(`Drive upload failed for "${file.name}": ${e.message}`);
+  }
+
+  // Best-effort Claude extraction — failures just leave the modal empty.
+  let prepped = {};
+  try {
+    const context = msg.text?.trim()
+      ? `Submitted via Slack by ${userName}. Their message: "${msg.text.trim()}"`
+      : `Submitted via Slack by ${userName}.`;
+    const rawText = await extractReceiptData({ mimeType, base64Data, context });
+    const parsed = parseClaudeJson(rawText);
+    prepped = {
+      provider:    parsed.provider    ?? null,
+      date:        parsed.date        ?? null,
+      amount:      parsed.amount   != null ? String(parsed.amount) : null,
+      currency:    parsed.currency    ?? null,
+      expense_type: parsed.expense_type ?? null,
+      paid_by:     parsed.suggested_paid_by ?? null,
+      cc_last4:    parsed.cc_last4 ? String(parsed.cc_last4) : null,
+      receipt_no:  parsed.receipt_no  ?? null,
+      notes:       parsed.notes       ?? null,
+    };
+    if (REIMBURSE_PATTERN.test(msg.text || "")) prepped.paid_by = "Employee";
+  } catch (e) {
+    console.warn(`Claude extraction failed for "${file.name}": ${e.message} — modal opens with empty fields`);
+  }
+
+  // Slack button value limit is 2000 chars — truncate notes if needed.
+  if (prepped.notes && prepped.notes.length > 150) prepped.notes = prepped.notes.slice(0, 150);
+
+  const meta = { invoiceLink, channelId: CHANNEL_ID, userId: msg.user, userName, msgTs: msg.ts };
+
+  await slackApi("chat.postMessage", {
+    channel: CHANNEL_ID,
+    thread_ts: msg.ts,
+    text: `Receipt from ${userName} — click to fill in details`,
+    blocks: [
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: `*Receipt received* from *${userName}*\nI've pre-filled what I could read — please review and submit.`,
+        },
+      },
+      {
+        type: "actions",
+        elements: [
+          {
+            type: "button",
+            text: { type: "plain_text", text: "📋  Fill in details" },
+            style: "primary",
+            action_id: "open_receipt_modal",
+            value: JSON.stringify({ prepped, meta }),
+          },
+        ],
+      },
+    ],
   });
 
-  // Pass the employee's message as context so Claude can factor in any
-  // explicit reimbursement signal ("this is personal", etc.).
-  const context = messageText?.trim()
-    ? `Submitted via Slack by ${userName}. Their message: "${messageText.trim()}"`
-    : `Submitted via Slack by ${userName}.`;
-
-  const rawText = await extractReceiptData({ mimeType, base64Data, context });
-  const parsed = parseClaudeJson(rawText);
-
-  if (parsed.is_receipt !== true) {
-    console.log(`Not a receipt (is_receipt=${parsed.is_receipt}) — skipping "${file.name}"`);
-    return;
-  }
-
-  const receiptNo = (parsed.receipt_no ?? "").toString().trim();
-  if (receiptNo && existingReceiptNumbers.has(receiptNo)) {
-    console.log(`Duplicate receipt_no "${receiptNo}" (${parsed.provider}) — skipping`);
-    return;
-  }
-
-  // If the receipt is an employee expense OR the message hints at reimbursement,
-  // record the submitter as the cardholder so Finance knows who to pay back.
-  const isEmployeeExpense =
-    parsed.suggested_paid_by === "Employee" ||
-    REIMBURSE_PATTERN.test(messageText || "");
-  const cardholder = isEmployeeExpense ? userName : "";
-
-  await appendReceiptRow(
-    SHEETS_ID,
-    buildReceiptRow({
-      parsed,
-      sourceEmail: `slack:${userName}`,
-      invoiceLink,
-      cardholder,
-    })
-  );
-
-  if (receiptNo) existingReceiptNumbers.add(receiptNo);
-  console.log(
-    `Added row: ${parsed.provider} · ${parsed.amount} ${parsed.currency} · ` +
-    `${parsed.document_type || "receipt"} ${receiptNo || "(none)"} · submitted by ${userName}` +
-    (cardholder ? " [employee expense]" : "")
-  );
+  console.log(`Posted receipt prompt for "${file.name}" from ${userName}`);
 }
 
 async function pollCycle() {
   console.log(`Slack intake cycle started at ${new Date().toISOString()}`);
   try {
     let cursor = await getSlackIntakeCursor(SHEETS_ID);
-
-    // First run: default to 24h ago so existing channel history isn't replayed.
     if (!cursor) {
       cursor = String((Date.now() / 1000 - 86400).toFixed(6));
       console.log("No cursor found — defaulting to 24h ago.");
     }
 
     const messages = await getChannelHistory(SLACK_TOKEN, CHANNEL_ID, cursor);
-
-    // conversations.history returns newest-first; process oldest-first so the
-    // cursor advances incrementally even if a later message errors.
-    const ordered = [...messages].reverse();
+    const ordered = [...messages].reverse(); // oldest-first
 
     if (ordered.length === 0) {
       console.log("No new messages.");
       return;
     }
 
-    const existingReceiptNumbers = await getExistingReceiptNumbers(SHEETS_ID);
-
     for (const msg of ordered) {
       const files = msg.files || [];
-      const messageText = msg.text || "";
       const userName = msg.user ? await getSlackUserName(SLACK_TOKEN, msg.user) : "unknown";
 
       for (const file of files) {
         try {
-          await processSlackFile({ file, userName, messageText, existingReceiptNumbers });
+          await processSlackFile({ file, msg, userName });
         } catch (e) {
-          console.error(`Error processing file "${file.name}" from ${userName}:`, e.message);
+          console.error(`Error processing "${file.name}" from ${userName}:`, e.message);
           appendErrorRow(SHEETS_ID, {
             service: "slack-intake",
             sender: userName,
@@ -175,18 +399,12 @@ async function pollCycle() {
         }
       }
 
-      // Advance the cursor after each message so a crash mid-batch doesn't
-      // replay already-processed messages on the next run.
       await setSlackIntakeCursor(SHEETS_ID, msg.ts);
     }
 
     console.log(`Slack intake: processed ${ordered.length} message(s).`);
   } catch (e) {
     console.error("Slack intake cycle failed:", e.message);
-    appendErrorRow(SHEETS_ID, {
-      service: "slack-intake",
-      error: `Cycle failed: ${e.message}`,
-    }).catch(() => {});
   }
 }
 
@@ -196,7 +414,7 @@ if (runOnce) {
   await pollCycle();
   console.log("Single Slack intake cycle complete (--once).");
 } else {
-  console.log(`Slack intake running — polling every ${POLL_INTERVAL_MINUTES} minute(s).`);
+  console.log(`Slack intake running — polling every ${POLL_INTERVAL_MIN} minute(s).`);
   await pollCycle();
-  setInterval(pollCycle, POLL_INTERVAL_MINUTES * 60 * 1000);
+  setInterval(pollCycle, POLL_INTERVAL_MIN * 60 * 1000);
 }

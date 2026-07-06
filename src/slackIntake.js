@@ -15,6 +15,20 @@ async function slackGet(token, method, params = {}) {
   return data;
 }
 
+export async function slackPost(token, method, body) {
+  const res = await fetch(`${SLACK_API}/${method}`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json();
+  if (!data.ok) throw new Error(`Slack ${method} error: ${data.error}`);
+  return data;
+}
+
 // Messages in channelId posted strictly after `oldest` (Slack timestamp string,
 // e.g. "1234567890.123456"). Returns newest-first; caller reverses if needed.
 export async function getChannelHistory(token, channelId, oldest) {
