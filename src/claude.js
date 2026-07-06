@@ -18,9 +18,11 @@ const IMAGE_MEDIA_TYPES = new Set([
 // Pure helper — exported so the MIME-branching is unit-testable without
 // hitting the Anthropic API.
 export function buildContentBlocks({ mimeType, base64Data, textBody, context }) {
+  const today = new Date().toISOString().slice(0, 10);
+  const basePrompt = `${RECEIPT_PROMPT} Today's date is ${today} — if the date you read from the document looks implausible (e.g. more than 1 year ago, or in the future) assume it is a misread and return null for date instead.`;
   const prompt = context
-    ? `${RECEIPT_PROMPT}\n\nAdditional context from the submitter: ${context}`
-    : RECEIPT_PROMPT;
+    ? `${basePrompt}\n\nAdditional context from the submitter: ${context}`
+    : basePrompt;
 
   if (base64Data && mimeType === "application/pdf") {
     return [
