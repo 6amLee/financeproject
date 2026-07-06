@@ -120,12 +120,39 @@ export function setSlackIntakeCursor(sheetId, ts) {
   return task;
 }
 
+// Known company cards — last 4 digits → card type + cardholder.
+// If the receipt shows one of these, paid_by is forced to Organization and
+// the credit card column is populated automatically.
+const COMPANY_CARDS = {
+  "4154": { type: "Amex", cardholder: "Roee" },
+  "9037": { type: "Amex", cardholder: "Ron"  },
+  "4287": { type: "Amex", cardholder: null   },
+  "5438": { type: "Visa", cardholder: "Roee" },
+  "0375": { type: "Visa", cardholder: "Ron"  },
+};
+
+// Matches the sheet dropdown format: "5438 ILS Visa Roee", "5438 $ Visa Roee", etc.
+function creditCardLabel(last4, currency, cardInfo) {
+  const cur = currency === "USD" ? "$" : currency === "EUR" ? "€" : (currency || "");
+  const parts = [last4, cur, cardInfo.type, cardInfo.cardholder].filter(Boolean);
+  return parts.join(" ");
+}
+
 // Column order per Master Doc §4:
 // Captured at · Source · Expense type · Date · Currency · Amount · Paid by ·
 // Credit card · Cardholder · Provider · Receipt No. · Comments · Invoice link ·
-// Status · Matched Amex txn · Document type
+// Status · Matched CC txn · Document type
 export function buildReceiptRow({ parsed, sourceEmail, invoiceLink, cardholder = "" }) {
   const cell = (v) => (v === null || v === undefined ? "" : v);
+
+  // cc_last4 on a known company card is harder evidence than Claude's guess —
+  // override paid_by, credit card label, and cardholder from the map.
+  const last4 = parsed.cc_last4 ? String(parsed.cc_last4).trim() : null;
+  const cardInfo = last4 ? COMPANY_CARDS[last4] : null;
+  const paidBy        = cardInfo ? "Organization" : cell(parsed.suggested_paid_by);
+  const creditCard    = cardInfo ? creditCardLabel(last4, parsed.currency, cardInfo) : "";
+  const cardholderOut = cardholder || (cardInfo?.cardholder ?? "");
+
   return [
     new Date().toISOString(),        // A: Captured at
     cell(sourceEmail),               // B: Source
@@ -133,15 +160,15 @@ export function buildReceiptRow({ parsed, sourceEmail, invoiceLink, cardholder =
     cell(parsed.date),               // D: Date
     cell(parsed.currency),           // E: Currency
     cell(parsed.amount),             // F: Amount
-    cell(parsed.suggested_paid_by),  // G: Paid by
-    "",                              // H: Credit card (not derivable from receipt)
-    cell(cardholder),                // I: Cardholder
+    paidBy,                          // G: Paid by
+    creditCard,                      // H: Credit card
+    cardholderOut,                   // I: Cardholder
     cell(parsed.provider),           // J: Provider
     cell(parsed.receipt_no),         // K: Receipt No.
     cell(parsed.notes),              // L: Comments
     cell(invoiceLink),               // M: Invoice link
     "Pending",                       // N: Status
-    "",                              // O: Matched Amex txn
+    "",                              // O: Matched CC txn
     cell(parsed.document_type),      // P: Document type (receipt / invoice / other)
   ];
 }

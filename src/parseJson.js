@@ -12,6 +12,7 @@ const REQUIRED_KEYS = [
   "receipt_no",
   "expense_type",
   "suggested_paid_by",
+  "cc_last4",
   "notes",
 ];
 
