@@ -5,8 +5,8 @@ import {
   getChaseRecipients,
   STAGE_MANAGERS,
   STAGE_FINAL_TARGETS,
-} from "../src/rachel/chase.js";
-import { COLD_START_OWNERS } from "../src/rachel/resolver.js";
+} from "../src/rambo/chase.js";
+import { COLD_START_OWNERS } from "../src/rambo/resolver.js";
 
 // Pure-logic tests only: nextChaseAction and buildChaseMessage take plain
 // data in and return plain data out — no clock mocking (now is a parameter),
@@ -76,7 +76,7 @@ describe("nextChaseAction — continuous timeline across stages", () => {
   });
 
   it("after applying the advance, the same tick's re-call fires stage 2's T+48 nudge", () => {
-    // rachel.js applies "advance" and calls again — no nudge is skipped.
+    // rambo.js applies "advance" and calls again — no nudge is skipped.
     const advanced = freshState({
       stage: 2,
       stageEnteredAt: at(48).toISOString(),

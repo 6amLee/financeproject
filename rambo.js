@@ -1,4 +1,4 @@
-// ── THE RACHEL — STATEMENT RECONCILIATION + SLACK CHASE ──────────────────────
+// ── THE RAMBO — STATEMENT RECONCILIATION + SLACK CHASE ──────────────────────
 // Separate entry point from index.js, per the design doc's explicit decision:
 // intake polls Gmail every few minutes, the chase cadence is measured in
 // hours, so they are different processes with different intervals. Run with
@@ -8,26 +8,26 @@
 //
 // Restart safety: there is no in-process last-run bookkeeping to carry across
 // restarts (same as index.js) — the double-fire protection for nudges lives
-// in the PERSISTED chase state (lastNudgeAt in the "Rachel Chase State" tab),
+// in the PERSISTED chase state (lastNudgeAt in the "Rambo Chase State" tab),
 // which nextChaseAction consults, so a restarted process never re-sends a
 // nudge whose threshold already fired.
 
-import { normalizeStatement } from "./src/rachel/normalizer.js";
-import { parseOwnershipSheet } from "./src/rachel/ownership.js";
-import { matchReceipts, clusterTransactions } from "./src/rachel/matcher.js";
-import { resolveOwner } from "./src/rachel/resolver.js";
-import { getLedgerEntries } from "./src/rachel/ledger.js";
+import { normalizeStatement } from "./src/rambo/normalizer.js";
+import { parseOwnershipSheet } from "./src/rambo/ownership.js";
+import { matchReceipts, clusterTransactions } from "./src/rambo/matcher.js";
+import { resolveOwner } from "./src/rambo/resolver.js";
+import { getLedgerEntries } from "./src/rambo/ledger.js";
 import {
   getChaseStates,
   appendChaseState,
   updateChaseState,
-} from "./src/rachel/chaseState.js";
+} from "./src/rambo/chaseState.js";
 import {
   nextChaseAction,
   buildChaseMessage,
   getChaseRecipients,
   sendChaseNudges,
-} from "./src/rachel/chase.js";
+} from "./src/rambo/chase.js";
 import { readTabRows } from "./src/sheets.js";
 
 // Load .env for local runs if this Node version supports it (20.12+).
@@ -57,12 +57,8 @@ const SHEETS_ID = process.env.GOOGLE_SHEETS_ID;
 const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN || "";
 // Separate from index.js's POLL_INTERVAL_MINUTES — different cadence for a
 // different loop. Chase thresholds are 24h apart, so hourly is plenty.
-// Env var is named LUNA_ (not RACHEL_) — the Railway service was renamed to
-// "Luna" after this code was first written; the code/file names (rachel.js,
-// chase.js, etc.) were intentionally left as-is, only the env var + docs
-// follow the rename.
-const RACHEL_POLL_INTERVAL_MINUTES =
-  Number(process.env.LUNA_POLL_INTERVAL_MINUTES) || 60;
+const RAMBO_POLL_INTERVAL_MINUTES =
+  Number(process.env.RAMBO_POLL_INTERVAL_MINUTES) || 60;
 
 // Master DB columns A–O per sheets.js buildReceiptRow / matcher.js MASTER_COL.
 const MASTER_DB_RANGE = "'Master DB'!A2:O";
@@ -70,7 +66,7 @@ const MASTER_DB_RANGE = "'Master DB'!A2:O";
 const OWNERSHIP_RANGE = "'Vendor Ownership'!A2:J";
 
 // ── STATEMENT INGESTION — INTEGRATION POINT, DELIBERATELY NOT WIRED ──────────
-// How the statement file reaches Rachel is explicitly undecided (design doc
+// How the statement file reaches Rambo is explicitly undecided (design doc
 // "Open decisions" #1 — Drive-folder watch vs email-forward vs something
 // else). Whichever method gets picked must return the statement as an
 // already-parsed 2D array (rows × columns) for normalizeStatement(). Until
@@ -217,7 +213,7 @@ async function processCluster({ cluster, missingCount, existingState, ownershipM
 }
 
 async function pollCycle() {
-  console.log(`Luna cycle started at ${new Date().toISOString()}${dryRun ? " [dry-run]" : ""}`);
+  console.log(`Rambo cycle started at ${new Date().toISOString()}${dryRun ? " [dry-run]" : ""}`);
   try {
     const grid = await fetchStatementGrid();
     if (!grid) {
@@ -277,15 +273,15 @@ async function pollCycle() {
       }
     }
   } catch (e) {
-    console.error("Luna cycle failed:", e.message);
+    console.error("Rambo cycle failed:", e.message);
   }
 }
 
 if (runOnce) {
   await pollCycle();
-  console.log("Single Luna cycle complete (--once).");
+  console.log("Single Rambo cycle complete (--once).");
 } else {
-  console.log(`Luna running — polling every ${RACHEL_POLL_INTERVAL_MINUTES} minute(s).`);
+  console.log(`Rambo running — polling every ${RAMBO_POLL_INTERVAL_MINUTES} minute(s).`);
   await pollCycle();
-  setInterval(pollCycle, RACHEL_POLL_INTERVAL_MINUTES * 60 * 1000);
+  setInterval(pollCycle, RAMBO_POLL_INTERVAL_MINUTES * 60 * 1000);
 }

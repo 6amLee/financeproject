@@ -1,7 +1,7 @@
 // ── CLAUDE EXTRACTION ─────────────────────────────────────────────────────────
 // Sends the receipt (PDF, image, or bare email body) to Claude Haiku and
 // returns the raw text response. Prompt is the tuned extractor prompt from
-// The_Rachel_Master_Doc.md §7 — reused verbatim.
+// The_Rambo_Master_Doc.md §7 — reused verbatim.
 
 import Anthropic from "@anthropic-ai/sdk";
 

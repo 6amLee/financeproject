@@ -1,4 +1,4 @@
-// ── RACHEL STAGE 0: STATEMENT NORMALIZER ─────────────────────────────────────
+// ── RAMBO STAGE 0: STATEMENT NORMALIZER ─────────────────────────────────────
 // Pure function: an already-parsed 2D array (rows × columns) of the statement
 // sheet in, flat TransactionRow objects out. No I/O in this module — the
 // statement ingestion path is deliberately undecided (design doc "Open

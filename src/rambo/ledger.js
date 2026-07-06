@@ -1,5 +1,5 @@
-// ── RACHEL LEDGER (learning-ledger Sheet tab I/O) ────────────────────────────
-// Read/write the "Rachel Ledger" tab: one row per resolution, the
+// ── RAMBO LEDGER (learning-ledger Sheet tab I/O) ────────────────────────────
+// Read/write the "Rambo Ledger" tab: one row per resolution, the
 // self-maintaining record Stage 2's resolver learns from. Column order:
 //   vendor · card · resolved_owner (comma-joined if multiple) ·
 //   resolved_at (ISO string) · resolution_source · confirmed (TRUE/FALSE)
@@ -10,7 +10,7 @@
 import { google } from "googleapis";
 import { getGoogleAuth } from "../googleAuth.js";
 
-const TAB_NAME = "Rachel Ledger";
+const TAB_NAME = "Rambo Ledger";
 // Row 1 is the header; data starts at A2.
 const DATA_RANGE = `'${TAB_NAME}'!A2:F`;
 

@@ -16,7 +16,7 @@ vi.mock("../src/googleAuth.js", () => ({
 }));
 
 const { getLedgerEntries, appendLedgerEntry, buildLedgerRow } = await import(
-  "../src/rachel/ledger.js"
+  "../src/rambo/ledger.js"
 );
 
 beforeEach(() => {
@@ -60,7 +60,7 @@ describe("buildLedgerRow", () => {
 });
 
 describe("appendLedgerEntry", () => {
-  it("appends the built row to the Rachel Ledger tab with the sheets.js append options", async () => {
+  it("appends the built row to the Rambo Ledger tab with the sheets.js append options", async () => {
     await appendLedgerEntry("sheet-123", {
       vendor: "LinkedIn",
       card: "9037",
@@ -72,7 +72,7 @@ describe("appendLedgerEntry", () => {
     expect(mockAppend).toHaveBeenCalledTimes(1);
     expect(mockAppend).toHaveBeenCalledWith({
       spreadsheetId: "sheet-123",
-      range: "'Rachel Ledger'!A1",
+      range: "'Rambo Ledger'!A1",
       valueInputOption: "RAW",
       insertDataOption: "INSERT_ROWS",
       requestBody: {
@@ -143,7 +143,7 @@ describe("getLedgerEntries", () => {
 
     expect(mockGet).toHaveBeenCalledWith({
       spreadsheetId: "sheet-123",
-      range: "'Rachel Ledger'!A2:F",
+      range: "'Rambo Ledger'!A2:F",
     });
     expect(entries).toEqual([
       {

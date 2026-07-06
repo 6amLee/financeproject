@@ -1,4 +1,4 @@
-// ── RACHEL STAGE 2: OWNERSHIP RESOLVER ───────────────────────────────────────
+// ── RAMBO STAGE 2: OWNERSHIP RESOLVER ───────────────────────────────────────
 // Pure decision logic, no I/O: given an unmatched charge's vendor/card/cluster
 // plus the parsed ownership map (ownership.js), past ledger entries
 // (ledger.js's getLedgerEntries shape) and the cold-start list, rank who to
