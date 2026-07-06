@@ -51,13 +51,19 @@ async function resolveLabelIds() {
 }
 
 // (a) Messages carrying the watch label that don't yet have the processed label.
+// Only looks back INTAKE_LOOKBACK_DAYS (default 7) to skip any old backlog.
 export async function listUnprocessedMessages() {
   const gmail = getGmail();
   const { watchId, processedId } = await resolveLabelIds();
 
+  const lookbackDays = Number(process.env.INTAKE_LOOKBACK_DAYS) || 7;
+  const since = new Date(Date.now() - lookbackDays * 24 * 60 * 60 * 1000);
+  const afterQuery = `after:${since.getFullYear()}/${String(since.getMonth() + 1).padStart(2, "0")}/${String(since.getDate()).padStart(2, "0")}`;
+
   const res = await gmail.users.messages.list({
     userId: "me",
     labelIds: [watchId],
+    q: afterQuery,
     maxResults: 50,
   });
   const messages = res.data.messages || [];
