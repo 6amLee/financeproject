@@ -27,8 +27,9 @@ export function getGoogleAuth() {
 
   const options = { credentials, scopes: SCOPES };
   // Gmail requires domain-wide delegation + impersonating a real mailbox.
-  if (process.env.GMAIL_IMPERSONATE_USER) {
-    options.clientOptions = { subject: process.env.GMAIL_IMPERSONATE_USER };
+  const impersonateUser = process.env.GMAIL_IMPERSONATE_USER || process.env.GOOGLE_IMPERSONATE_USER;
+  if (impersonateUser) {
+    options.clientOptions = { subject: impersonateUser };
   }
 
   _auth = new google.auth.GoogleAuth(options);
