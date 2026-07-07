@@ -61,8 +61,8 @@ const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN || "";
 const RAMBO_POLL_INTERVAL_MINUTES =
   Number(process.env.RAMBO_POLL_INTERVAL_MINUTES) || 60;
 
-// Master DB columns A–O per sheets.js buildReceiptRow / matcher.js MASTER_COL.
-const MASTER_DB_RANGE = "'Master DB'!A2:O";
+// Master DB columns A–P per sheets.js buildReceiptRow / matcher.js MASTER_COL.
+const MASTER_DB_RANGE = "'Master DB'!A2:P";
 // Vendor Ownership columns per ownership.js COL (10 columns, A–J).
 const OWNERSHIP_RANGE = "'Vendor Ownership'!A2:J";
 

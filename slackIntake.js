@@ -59,6 +59,8 @@ const SIGNING_SECRET    = process.env.SLACK_SIGNING_SECRET || "";
 const POLL_INTERVAL_MIN   = Number(process.env.SLACK_INTAKE_POLL_MINUTES) || 5;
 const STATEMENTS_CHANNEL  = process.env.SLACK_STATEMENTS_CHANNEL || "";
 
+const MAX_FILE_BYTES = 10 * 1024 * 1024; // 10 MB — receipts should never be larger
+
 const SUPPORTED_MIME_TYPES = new Set([
   "application/pdf",
   "image/jpeg",
@@ -250,7 +252,6 @@ const server = http.createServer((req, res) => {
   req.on("data", (c) => chunks.push(c));
   req.on("end", async () => {
     const rawBody = Buffer.concat(chunks).toString();
-    console.log(`Slack request received: ${req.method} ${req.url} (${rawBody.length} bytes)`);
 
     if (!verifySlackRequest(
       rawBody,
@@ -298,19 +299,16 @@ const server = http.createServer((req, res) => {
       res.writeHead(400); res.end(); return;
     }
 
-    console.log(`Slack payload type: ${payload.type}, action: ${payload.actions?.[0]?.action_id || payload.view?.callback_id || "n/a"}`);
-
     try {
       if (payload.type === "block_actions") {
         const action = payload.actions?.[0];
 
         if (action?.action_id === "open_receipt_modal") {
           const data = JSON.parse(action.value);
-          const result = await slackApi("views.open", {
+          await slackApi("views.open", {
             trigger_id: payload.trigger_id,
             view: buildModal(data),
           });
-          console.log(`views.open result: ok=${result.ok}`);
         }
 
         // Paid By changed — re-render modal to show/hide CC field.
@@ -449,6 +447,10 @@ async function handleStatementUpload(msg) {
   const uploaderName = msg.user ? await getSlackUserName(SLACK_TOKEN, msg.user) : "unknown";
   console.log(`Statement upload from ${uploaderName}: ${excelFile.name}`);
 
+  if (excelFile.size && excelFile.size > MAX_FILE_BYTES) {
+    console.warn(`Statement file "${excelFile.name}" is ${excelFile.size} bytes — exceeds limit, skipping.`);
+    return;
+  }
   let base64Data;
   try {
     base64Data = await downloadSlackFile(SLACK_TOKEN, excelFile.url_private);
@@ -592,6 +594,10 @@ async function handleDmReceipt(msg) {
     return;
   }
 
+  if (file.size && file.size > MAX_FILE_BYTES) {
+    console.warn(`DM receipt "${file.name}" is ${file.size} bytes — exceeds limit, skipping.`);
+    return;
+  }
   let base64Data;
   try {
     base64Data = await downloadSlackFile(SLACK_TOKEN, file.url_private);
@@ -729,6 +735,10 @@ async function processSlackFile({ file, msg, userName }) {
   const mimeType = normaliseMime(file.mimetype);
   if (!SUPPORTED_MIME_TYPES.has(mimeType)) {
     console.warn(`Skipping unsupported file "${file.name}" (${file.mimetype})`);
+    return;
+  }
+  if (file.size && file.size > MAX_FILE_BYTES) {
+    console.warn(`Skipping "${file.name}": ${file.size} bytes exceeds limit.`);
     return;
   }
 

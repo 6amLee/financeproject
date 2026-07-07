@@ -1,7 +1,7 @@
 // ── SLACK INTAKE HELPERS ───────────────────────────────────────────────────────
 // Slack Web API calls needed for the receipt intake channel: read channel
 // history, download a file, resolve a user display name. Uses native fetch
-// (same pattern as rachel's sendSlackMessage — no SDK dependency).
+// (same pattern as rambo's sendSlackMessage — no SDK dependency).
 
 const SLACK_API = "https://slack.com/api";
 
@@ -44,6 +44,9 @@ export async function getChannelHistory(token, channelId, oldest) {
 // Download a Slack file URL and return the content as a base64 string.
 // Slack file URLs require an Authorization header — they are not public.
 export async function downloadSlackFile(token, url) {
+  if (!url.startsWith("https://files.slack.com/")) {
+    throw new Error(`Refusing to fetch non-Slack URL: ${url}`);
+  }
   const res = await fetch(url, {
     headers: { Authorization: `Bearer ${token}` },
   });

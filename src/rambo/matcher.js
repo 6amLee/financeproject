@@ -29,7 +29,7 @@ export const MASTER_COL = {
   comments: 11,
   invoiceLink: 12,
   status: 13,
-  matchedAmexTxn: 14,
+  matchedCcTxn: 14,
 };
 
 // Expense types where the statement amount may exceed the receipt amount by
