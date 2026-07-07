@@ -40,7 +40,9 @@ const STATEMENTS_CHANNEL = process.env.SLACK_STATEMENTS_CHANNEL || "";
 const COMPANY_CHANNEL    = process.env.SLACK_COMPANY_CHANNEL    || "";
 const YULIA_SLACK_ID     = process.env.YULIA_SLACK_ID           || "U088YU5HD4H";
 const POLL_INTERVAL_MIN  = Number(process.env.STATEMENT_RAMBO_POLL_MINUTES) || 60;
-const NUDGE_INTERVAL_MS  = 24 * 60 * 60 * 1000; // 24 hours between stages
+const NUDGE_INTERVAL_MS  = process.env.STATEMENT_NUDGE_INTERVAL_MINUTES
+  ? Number(process.env.STATEMENT_NUDGE_INTERVAL_MINUTES) * 60 * 1000
+  : 24 * 60 * 60 * 1000; // default 24 hours between stages
 
 const MASTER_DB_RANGE = "'Master DB'!A2:P";
 
