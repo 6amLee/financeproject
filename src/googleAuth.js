@@ -1,6 +1,7 @@
 // ── GOOGLE AUTH ───────────────────────────────────────────────────────────────
 // Two auth singletons:
-//   getGoogleAuth()  — Sheets + Drive (drive.file scope only, no impersonation)
+//   getGoogleAuth()  — Sheets + Drive (drive scope, no impersonation — safe because
+//                      this service account has no domain-wide delegation for Drive)
 //   getGmailAuth()   — Gmail only, impersonates the configured mailbox
 //
 // NOTE: this must be the Finance project's OWN service account — never Monica's.
@@ -9,7 +10,7 @@ import { google } from "googleapis";
 
 const SHEETS_DRIVE_SCOPES = [
   "https://www.googleapis.com/auth/spreadsheets",
-  "https://www.googleapis.com/auth/drive.file",
+  "https://www.googleapis.com/auth/drive",
 ];
 
 const GMAIL_SCOPES = [

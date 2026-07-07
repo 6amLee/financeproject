@@ -47,8 +47,8 @@ export async function runStatementComparison({ base64Data, sheetsId }) {
 
   const [masterRows, ownershipRows, ledgerEntries] = await Promise.all([
     readTabRows(sheetsId, MASTER_DB_RANGE),
-    readTabRows(sheetsId, OWNERSHIP_RANGE).catch(() => []), // tab may not exist yet
-    getLedgerEntries(sheetsId),
+    readTabRows(sheetsId, OWNERSHIP_RANGE).catch(() => []),  // tab may not exist yet
+    getLedgerEntries(sheetsId).catch(() => []),               // tab may not exist yet
   ]);
 
   const { map: ownershipMap } = parseOwnershipSheet(ownershipRows);
