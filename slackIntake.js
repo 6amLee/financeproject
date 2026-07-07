@@ -304,7 +304,6 @@ const server = http.createServer((req, res) => {
         if (ev?.files?.length) {
           const isStatements = STATEMENTS_CHANNEL && ev.channel === STATEMENTS_CHANNEL;
           const isDm         = !isStatements && ev.channel?.startsWith("D");
-          console.log(`[debug] file event: channel=${ev.channel}, STATEMENTS_CHANNEL=${STATEMENTS_CHANNEL}, isStatements=${isStatements}`);
           const handler      = isStatements ? handleStatementUpload
                              : isDm        ? handleDmReceipt
                              :               handleIncomingMessage;

@@ -162,6 +162,10 @@ function detectSection(cells) {
   for (const { key, header } of SECTIONS) {
     if (joined.includes(header)) return key;
   }
+  // The account-number metadata row ("מספר חשבון 12-174-232330 תאריך הפקה...")
+  // appears after every section header as a single cell. It is not a section
+  // boundary — skip it without resetting the current section.
+  if (nonEmpty.length === 1 && nonEmpty[0].includes("מספר חשבון")) return undefined;
   // Heuristic for "some other section is starting" (previous-charges recap,
   // domestic/overseas summaries): section titles in the export occupy a
   // single cell, whereas column-header rows have several populated cells.
