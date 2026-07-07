@@ -3,11 +3,11 @@
 
 import { Readable } from "node:stream";
 import { google } from "googleapis";
-import { getGoogleAuth } from "./googleAuth.js";
+import { getDriveAuth } from "./googleAuth.js";
 
 let _drive = null;
 function getDrive() {
-  if (!_drive) _drive = google.drive({ version: "v3", auth: getGoogleAuth() });
+  if (!_drive) _drive = google.drive({ version: "v3", auth: getDriveAuth() });
   return _drive;
 }
 

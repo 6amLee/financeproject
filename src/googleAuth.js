@@ -1,15 +1,19 @@
 // ── GOOGLE AUTH ───────────────────────────────────────────────────────────────
-// Two auth singletons:
-//   getGoogleAuth()  — Sheets + Drive (drive scope, no impersonation — safe because
-//                      this service account has no domain-wide delegation for Drive)
+// Three auth singletons:
+//   getGoogleAuth()  — Sheets only, no impersonation
+//   getDriveAuth()   — Drive, impersonates GMAIL_IMPERSONATE_USER (service
+//                      accounts have no Drive quota; impersonation is required)
 //   getGmailAuth()   — Gmail only, impersonates the configured mailbox
 //
 // NOTE: this must be the Finance project's OWN service account — never Monica's.
 
 import { google } from "googleapis";
 
-const SHEETS_DRIVE_SCOPES = [
+const SHEETS_SCOPES = [
   "https://www.googleapis.com/auth/spreadsheets",
+];
+
+const DRIVE_SCOPES = [
   "https://www.googleapis.com/auth/drive",
 ];
 
@@ -17,7 +21,8 @@ const GMAIL_SCOPES = [
   "https://www.googleapis.com/auth/gmail.modify",
 ];
 
-let _auth = null;
+let _auth     = null;
+let _driveAuth = null;
 let _gmailAuth = null;
 
 function loadCredentials() {
@@ -30,11 +35,25 @@ function loadCredentials() {
   }
 }
 
-// Used by Sheets, Drive, and all Rambo modules.
+// Used by Sheets and all Rambo modules.
 export function getGoogleAuth() {
   if (_auth) return _auth;
-  _auth = new google.auth.GoogleAuth({ credentials: loadCredentials(), scopes: SHEETS_DRIVE_SCOPES });
+  _auth = new google.auth.GoogleAuth({ credentials: loadCredentials(), scopes: SHEETS_SCOPES });
   return _auth;
+}
+
+// Used by src/drive.js — service accounts have no Drive storage quota so we
+// must impersonate a real user. Reuses GMAIL_IMPERSONATE_USER (same mailbox).
+export function getDriveAuth() {
+  if (_driveAuth) return _driveAuth;
+  const impersonateUser = process.env.GMAIL_IMPERSONATE_USER || process.env.GOOGLE_IMPERSONATE_USER;
+  if (!impersonateUser) throw new Error("GMAIL_IMPERSONATE_USER env var is required for Drive access");
+  _driveAuth = new google.auth.GoogleAuth({
+    credentials: loadCredentials(),
+    scopes: DRIVE_SCOPES,
+    clientOptions: { subject: impersonateUser },
+  });
+  return _driveAuth;
 }
 
 // Used only by src/gmail.js — requires domain-wide delegation + impersonation.
