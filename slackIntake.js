@@ -721,6 +721,8 @@ async function handleIncomingMessage(msg) {
       console.error(`Error processing "${file.name}" from ${userName}:`, e.message);
       appendErrorRow(SHEETS_ID, {
         service: "slack-intake",
+        messageId: msg.ts,
+        subject: "(Slack file)",
         sender: userName,
         attachment: file.name,
         error: e.message,
