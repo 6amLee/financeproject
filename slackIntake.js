@@ -58,6 +58,7 @@ const CHANNEL_ID        = process.env.SLACK_INTAKE_CHANNEL;
 const SIGNING_SECRET    = process.env.SLACK_SIGNING_SECRET || "";
 const POLL_INTERVAL_MIN   = Number(process.env.SLACK_INTAKE_POLL_MINUTES) || 5;
 const STATEMENTS_CHANNEL  = process.env.SLACK_STATEMENTS_CHANNEL || "";
+const STATEMENT_DRY_RUN   = process.env.STATEMENT_DRY_RUN === "true";
 
 const MAX_FILE_BYTES = 10 * 1024 * 1024; // 10 MB — receipts should never be larger
 
@@ -535,51 +536,56 @@ async function handleStatementUpload(msg) {
 
   const { byOwner } = comparison;
   let dmCount = 0;
-  for (const [ownerName, items] of byOwner) {
-    const slackId = resolveSlackId(ownerName);
-    if (!slackId) {
-      console.warn(`No Slack ID for owner "${ownerName}" — skipping DM.`);
-      continue;
-    }
 
-    const pendingCharges = [];
-    for (const { cluster, pendingTxns } of items) {
-      for (const txn of pendingTxns) {
-        pendingCharges.push(buildPendingCharge(txn, cluster.key));
+  if (STATEMENT_DRY_RUN) {
+    console.log(`[dry-run] Statement processed — DMs suppressed. Would notify: ${[...byOwner.keys()].join(", ") || "nobody"}`);
+  } else {
+    for (const [ownerName, items] of byOwner) {
+      const slackId = resolveSlackId(ownerName);
+      if (!slackId) {
+        console.warn(`No Slack ID for owner "${ownerName}" — skipping DM.`);
+        continue;
       }
-    }
-    if (!pendingCharges.length) continue;
 
-    const chargeList = pendingCharges.map((c, i) => `${i + 1}. ${formatCharge(c)}`).join("\n");
-    const stage1Text =
-      `Hi ${ownerName} 👋 Yulia has uploaded the latest bank statement and I found ` +
-      `*${pendingCharges.length} charge(s)* that don't yet have a matching receipt on file:\n\n` +
-      `${chargeList}\n\n` +
-      `If any of these are yours, drop the receipt(s) right here in this chat — one at a time. ` +
-      `I'll match them automatically.`;
+      const pendingCharges = [];
+      for (const { cluster, pendingTxns } of items) {
+        for (const txn of pendingTxns) {
+          pendingCharges.push(buildPendingCharge(txn, cluster.key));
+        }
+      }
+      if (!pendingCharges.length) continue;
 
-    try {
-      const conv     = await slackApi("conversations.open", { users: slackId });
-      const dmChanId = conv.channel.id;
-      const dmResult = await slackApi("chat.postMessage", { channel: dmChanId, text: stage1Text });
-      const threadTs = dmResult.message?.ts || dmResult.ts;
+      const chargeList = pendingCharges.map((c, i) => `${i + 1}. ${formatCharge(c)}`).join("\n");
+      const stage1Text =
+        `Hi ${ownerName} 👋 Yulia has uploaded the latest bank statement and I found ` +
+        `*${pendingCharges.length} charge(s)* that don't yet have a matching receipt on file:\n\n` +
+        `${chargeList}\n\n` +
+        `If any of these are yours, drop the receipt(s) right here in this chat — one at a time. ` +
+        `I'll match them automatically.`;
 
-      await appendStatementChaseThread(SHEETS_ID, {
-        runId,
-        userName:      ownerName,
-        userId:        slackId,
-        dmChannelId:   dmChanId,
-        threadTs,
-        nudgeCount:    1,
-        lastNudgeAt:   new Date().toISOString(),
-        pendingCharges,
-        resolved:      false,
-      });
+      try {
+        const conv     = await slackApi("conversations.open", { users: slackId });
+        const dmChanId = conv.channel.id;
+        const dmResult = await slackApi("chat.postMessage", { channel: dmChanId, text: stage1Text });
+        const threadTs = dmResult.message?.ts || dmResult.ts;
 
-      dmCount++;
-      console.log(`Stage 1 DM sent to ${ownerName} (${pendingCharges.length} charges).`);
-    } catch (e) {
-      console.error(`Failed to DM ${ownerName}: ${e.message}`);
+        await appendStatementChaseThread(SHEETS_ID, {
+          runId,
+          userName:      ownerName,
+          userId:        slackId,
+          dmChannelId:   dmChanId,
+          threadTs,
+          nudgeCount:    1,
+          lastNudgeAt:   new Date().toISOString(),
+          pendingCharges,
+          resolved:      false,
+        });
+
+        dmCount++;
+        console.log(`Stage 1 DM sent to ${ownerName} (${pendingCharges.length} charges).`);
+      } catch (e) {
+        console.error(`Failed to DM ${ownerName}: ${e.message}`);
+      }
     }
   }
 
@@ -590,8 +596,9 @@ async function handleStatementUpload(msg) {
       `✅ Statement processed: *${comparison.totalCharges}* total charges, ` +
       `*${comparison.matchedCount}* already matched, ` +
       `*${comparison.unmatchedCount}* unaccounted. ` +
-      `DMs sent to *${dmCount}* person(s). ` +
-      `I'll follow up automatically if charges remain open.`,
+      (STATEMENT_DRY_RUN
+        ? `_(dry-run mode — no DMs sent)_`
+        : `DMs sent to *${dmCount}* person(s). I'll follow up automatically if charges remain open.`),
   }).catch(() => {});
 }
 
