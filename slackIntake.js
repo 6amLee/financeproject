@@ -43,6 +43,7 @@ const REQUIRED_ENV = [
   "GOOGLE_SHEETS_ID",
   "SLACK_BOT_TOKEN",
   "SLACK_INTAKE_CHANNEL",
+  "SLACK_SIGNING_SECRET",
 ];
 const missingEnv = REQUIRED_ENV.filter((k) => !process.env[k]);
 if (missingEnv.length > 0) {
@@ -81,7 +82,6 @@ async function slackApi(method, body) {
 // ── SLACK SIGNATURE VERIFICATION ─────────────────────────────────────────────
 
 function verifySlackRequest(rawBody, timestamp, signature) {
-  if (!SIGNING_SECRET) return true; // skip if not configured
   const age = Math.abs(Date.now() / 1000 - Number(timestamp));
   if (age > 300) return false;
   const base = `v0:${timestamp}:${rawBody}`;

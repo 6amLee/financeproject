@@ -4,11 +4,11 @@
 // and swap it for the processed label once a message is handled.
 
 import { google } from "googleapis";
-import { getGoogleAuth } from "./googleAuth.js";
+import { getGmailAuth } from "./googleAuth.js";
 
 let _gmail = null;
 function getGmail() {
-  if (!_gmail) _gmail = google.gmail({ version: "v1", auth: getGoogleAuth() });
+  if (!_gmail) _gmail = google.gmail({ version: "v1", auth: getGmailAuth() });
   return _gmail;
 }
 
