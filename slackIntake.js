@@ -81,6 +81,31 @@ async function slackApi(method, body) {
   return slackPost(SLACK_TOKEN, method, body);
 }
 
+// Returns true only if the Slack user has a @truvid.com email.
+// Requires the users:read.email OAuth scope on the bot token.
+// Fails closed — any API error is treated as unauthorized.
+async function verifyTruvid(userId) {
+  try {
+    const res = await fetch(`https://slack.com/api/users.info?user=${encodeURIComponent(userId)}`, {
+      headers: { Authorization: `Bearer ${SLACK_TOKEN}` },
+    });
+    const data = await res.json();
+    return data.ok && data.user?.profile?.email?.endsWith("@truvid.com");
+  } catch {
+    return false;
+  }
+}
+
+const UNAUTHORIZED_VIEW = {
+  type: "modal",
+  title: { type: "plain_text", text: "Not authorized" },
+  close: { type: "plain_text", text: "Close" },
+  blocks: [{
+    type: "section",
+    text: { type: "mrkdwn", text: "Only *@truvid.com* accounts can submit receipts. If you think this is a mistake, contact Lee." },
+  }],
+};
+
 // ── SLACK SIGNATURE VERIFICATION ─────────────────────────────────────────────
 
 function verifySlackRequest(rawBody, timestamp, signature) {
@@ -337,6 +362,12 @@ const server = http.createServer((req, res) => {
       }
 
       if (payload.type === "view_submission" && payload.view?.callback_id === "receipt_form") {
+        if (!await verifyTruvid(payload.user?.id)) {
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ response_action: "update", view: UNAUTHORIZED_VIEW }));
+          return;
+        }
+
         const vals = payload.view.state.values;
         const pick = (blockId) => {
           const b = vals[blockId]?.val;
