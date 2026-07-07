@@ -118,8 +118,7 @@ export function formatCharge(charge) {
   if (charge.amount != null) {
     parts.push(`${charge.amount}${charge.currency ? ` ${charge.currency}` : ""}`);
   }
-  if (charge.billingDate) parts.push(`(${charge.billingDate})`);
-  if (charge.card)        parts.push(`card ...${charge.card}`);
+  if (charge.card) parts.push(`card ...${charge.card}`);
   return parts.join(" · ");
 }
 

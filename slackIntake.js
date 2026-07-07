@@ -555,11 +555,24 @@ async function handleStatementUpload(msg) {
       }
       if (!pendingCharges.length) continue;
 
-      const chargeList = pendingCharges.map((c, i) => `${i + 1}. ${formatCharge(c)}`).join("\n");
+      // Group by cluster — one bullet per vendor with individual amounts underneath
+      const clusterLines = items
+        .filter(({ pendingTxns }) => pendingTxns.length > 0)
+        .map(({ cluster, pendingTxns }) => {
+          const merchant = cluster.vendor ?? cluster.merchant ?? "Unknown";
+          const card = cluster.card ? ` · card ...${cluster.card}` : "";
+          const amts = pendingTxns
+            .map((t) => `  - ${t.amount}${t.currency ? ` ${t.currency}` : ""}`)
+            .join("\n");
+          return `• *${merchant}*${card}\n${amts}`;
+        })
+        .join("\n\n");
+      const vendorCount = items.filter(({ pendingTxns }) => pendingTxns.length > 0).length;
+
       const stage1Text =
         `Hi ${ownerName} 👋 Yulia has uploaded the latest bank statement and I found ` +
-        `*${pendingCharges.length} charge(s)* that don't yet have a matching receipt on file:\n\n` +
-        `${chargeList}\n\n` +
+        `*${vendorCount} vendor(s)* with charges that don't yet have a matching receipt on file:\n\n` +
+        `${clusterLines}\n\n` +
         `If any of these are yours, drop the receipt(s) right here in this chat — one at a time. ` +
         `I'll match them automatically.`;
 

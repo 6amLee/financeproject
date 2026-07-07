@@ -52,32 +52,53 @@ async function slackApi(method, body) {
 
 // ── Nudge message builders ────────────────────────────────────────────────────
 
+// Groups a flat pendingCharges array by clusterKey and formats as:
+//   • *Merchant* · card ...XXXX
+//     - 2,196 ILS
+//     - 1,996 ILS
+function formatChargeList(charges) {
+  const groups = new Map();
+  for (const c of charges) {
+    const key = c.clusterKey ?? `${c.merchant}|${c.card}`;
+    if (!groups.has(key)) groups.set(key, { merchant: c.merchant, card: c.card, amounts: [] });
+    groups.get(key).amounts.push({ amount: c.amount, currency: c.currency });
+  }
+  return [...groups.values()]
+    .map(({ merchant, card, amounts }) => {
+      const header = [merchant ? `*${merchant}*` : "*Unknown*", card ? `card ...${card}` : null]
+        .filter(Boolean).join(" · ");
+      const amtLines = amounts
+        .map(({ amount, currency }) => `  - ${amount}${currency ? ` ${currency}` : ""}`)
+        .join("\n");
+      return `• ${header}\n${amtLines}`;
+    })
+    .join("\n\n");
+}
+
 function buildStage2Message(userName, charges) {
-  const list = charges.map((c, i) => `${i + 1}. ${formatCharge(c)}`).join("\n");
+  const vendorCount = new Set(charges.map((c) => c.clusterKey ?? c.merchant)).size;
   return (
     `Hi ${userName} — following up on the charges I flagged yesterday. ` +
-    `*${charges.length} receipt(s)* are still outstanding. ` +
+    `*${vendorCount} vendor(s)* still have no receipt on file. ` +
     `Please check your inbox, ask your team, and submit anything missing here ASAP — ` +
-    `one receipt at a time, right in this chat.\n\n${list}\n\n` +
+    `one receipt at a time, right in this chat.\n\n${formatChargeList(charges)}\n\n` +
     `_If you submitted a receipt recently and it's not here yet, it may still be processing — I'll re-check automatically._`
   );
 }
 
 function buildStage3Message(userName, charges) {
-  const list = charges.map((c, i) => `${i + 1}. ${formatCharge(c)}`).join("\n");
+  const vendorCount = new Set(charges.map((c) => c.clusterKey ?? c.merchant)).size;
   return (
     `Hi ${userName} — this is the final personal reminder. ` +
-    `*${charges.length} charge(s)* remain unaccounted for after two rounds of reminders.\n\n` +
-    `${list}\n\n` +
+    `*${vendorCount} vendor(s)* remain unaccounted for after two rounds of reminders.\n\n` +
+    `${formatChargeList(charges)}\n\n` +
     `A company-wide alert is going out now. Please submit before end of day.`
   );
 }
 
 function buildCompanyBlast(allOutstanding) {
   const lines = allOutstanding
-    .flatMap(({ userName, charges }) =>
-      charges.map((c) => `• ${formatCharge(c)} — owner: ${userName}`)
-    )
+    .flatMap(({ charges }) => charges.map((c) => `• ${formatCharge(c)}`))
     .join("\n");
   const total = allOutstanding.reduce((s, { charges }) => s + charges.length, 0);
   return (
