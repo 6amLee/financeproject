@@ -185,19 +185,38 @@ async function handleStage3(runId, allThreads) {
         const base64Data  = await downloadDriveFile(run.driveFileId);
         const coloredBuf  = await colorStatementExcel({ base64Data, unmatchedKeys });
 
-        const form = new FormData();
-        form.append("channels", STATEMENTS_CHANNEL);
-        form.append("filename", `statement_reviewed_${runId}.xlsx`);
-        form.append("initial_comment", `Statement review complete — red = no receipt after 3 nudges.`);
-        form.append("file", new Blob([coloredBuf], {
-          type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        }), `statement_reviewed_${runId}.xlsx`);
+        // Slack's new 3-step file upload (files.upload v1 is deprecated).
+        const filename = `statement_reviewed_${runId}.xlsx`;
+        const mimeType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 
-        await fetch("https://slack.com/api/files.upload", {
+        // Step 1: get upload URL
+        const urlRes = await fetch(
+          `https://slack.com/api/files.getUploadURLExternal?filename=${encodeURIComponent(filename)}&length=${coloredBuf.length}`,
+          { headers: { Authorization: `Bearer ${SLACK_TOKEN}` } }
+        );
+        const urlData = await urlRes.json();
+        if (!urlData.ok) throw new Error(`files.getUploadURLExternal: ${urlData.error}`);
+
+        // Step 2: upload the bytes
+        await fetch(urlData.upload_url, {
           method: "POST",
-          headers: { Authorization: `Bearer ${SLACK_TOKEN}` },
-          body: form,
+          headers: { "Content-Type": mimeType },
+          body: coloredBuf,
         });
+
+        // Step 3: complete + share to channel
+        const completeRes = await fetch("https://slack.com/api/files.completeUploadExternal", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${SLACK_TOKEN}`, "Content-Type": "application/json" },
+          body: JSON.stringify({
+            files: [{ id: urlData.file_id }],
+            channel_id: STATEMENTS_CHANNEL,
+            initial_comment: `Statement review complete — red = no receipt after 3 nudges.`,
+          }),
+        });
+        const completeData = await completeRes.json();
+        if (!completeData.ok) throw new Error(`files.completeUploadExternal: ${completeData.error}`);
+
         console.log(`Run ${runId}: colored statement posted.`);
 
         // Mark run as complete
