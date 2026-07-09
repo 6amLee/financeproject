@@ -50,8 +50,21 @@ async function processAttachment(attachment) {
     base64Data,
     folderId: DRIVE_FOLDER_ID,
   });
-  const rawText = await extractReceiptData({ mimeType, base64Data });
-  return { parsed: parseClaudeJson(rawText), invoiceLink };
+  let rawText;
+  try {
+    rawText = await extractReceiptData({ mimeType, base64Data });
+  } catch (e) {
+    console.warn(`Claude extraction failed for "${filename}": ${e.message}`);
+    return null;
+  }
+  let parsed;
+  try {
+    parsed = parseClaudeJson(rawText);
+  } catch (e) {
+    console.warn(`Claude returned non-JSON for "${filename}" — skipping. Response: ${rawText.slice(0, 120)}`);
+    return null;
+  }
+  return { parsed, invoiceLink };
 }
 
 async function processMessage(messageId, existingReceiptNumbers) {
