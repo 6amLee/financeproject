@@ -32,6 +32,19 @@ import {
 import { appendStatementChaseThread, getStatementChaseThreads, updateStatementChaseThread } from "./src/rambo/statementChase.js";
 import { appendStatementRun } from "./src/rambo/statementRuns.js";
 import { resolveSlackId } from "./src/rambo/slackIds.js";
+import { appendLedgerEntry } from "./src/rambo/ledger.js";
+import { getTravelRows, appendTravelRow, updateTravelRow, existingChannel, rowsForEvent } from "./src/travels/travelsSheet.js";
+import { createTripChannel, addEmployeeToChannel } from "./src/travels/travelsSlack.js";
+import { buildTripSummary, formatTotals } from "./src/travels/travelsSummary.js";
+import {
+  employeeRegistrationMessage,
+  yuliaRosterUpdateMessage,
+  tripCancelledToEmployeeMessage,
+  tripCancelledToYuliaMessage,
+  tripCostSummaryMessage,
+  formatTravelDate,
+  addDays,
+} from "./src/travels/travelsMessages.js";
 
 if (typeof process.loadEnvFile === "function") {
   try { process.loadEnvFile(); } catch { /* no .env file — fine */ }
@@ -58,6 +71,7 @@ const CHANNEL_ID        = process.env.SLACK_INTAKE_CHANNEL;
 const SIGNING_SECRET    = process.env.SLACK_SIGNING_SECRET || "";
 const POLL_INTERVAL_MIN   = Number(process.env.SLACK_INTAKE_POLL_MINUTES) || 5;
 const STATEMENTS_CHANNEL  = process.env.SLACK_STATEMENTS_CHANNEL || "";
+const YULIA_SLACK_ID      = process.env.YULIA_SLACK_ID || "";
 const STATEMENT_DRY_RUN   = process.env.STATEMENT_DRY_RUN === "true";
 
 const MAX_FILE_BYTES = 10 * 1024 * 1024; // 10 MB — receipts should never be larger
@@ -270,7 +284,8 @@ function buildModal({ prepped, meta }) {
 const server = http.createServer((req, res) => {
   const isInteractions = req.url === "/slack/interactions";
   const isEvents       = req.url === "/slack/events";
-  if (req.method !== "POST" || (!isInteractions && !isEvents)) {
+  const isCommands     = req.url === "/slack/commands";
+  if (req.method !== "POST" || (!isInteractions && !isEvents && !isCommands)) {
     res.writeHead(404); res.end(); return;
   }
 
@@ -305,10 +320,17 @@ const server = http.createServer((req, res) => {
         if (ev?.files?.length) {
           const isStatements = STATEMENTS_CHANNEL && ev.channel === STATEMENTS_CHANNEL;
           const isDm         = !isStatements && ev.channel?.startsWith("D");
-          const handler      = isStatements ? handleStatementUpload
-                             : isDm        ? handleDmReceipt
-                             :               handleIncomingMessage;
-          handler(ev).catch((e) => console.error("Event handler error:", e.message));
+          // Check if the upload is in a known travel channel.
+          const isTravelChannel = !isStatements && !isDm && ev.channel?.startsWith("C");
+          if (isStatements) {
+            handleStatementUpload(ev).catch((e) => console.error("Event handler error:", e.message));
+          } else if (isDm) {
+            handleDmReceipt(ev).catch((e) => console.error("Event handler error:", e.message));
+          } else if (isTravelChannel) {
+            handleTravelChannelUpload(ev).catch((e) => console.error("Event handler error:", e.message));
+          } else {
+            handleIncomingMessage(ev).catch((e) => console.error("Event handler error:", e.message));
+          }
         }
         return;
       }
@@ -325,6 +347,49 @@ const server = http.createServer((req, res) => {
       res.writeHead(400); res.end(); return;
     }
 
+    // ── Slash commands (/rambotravels) ───────────────────────────────────────
+    if (isCommands) {
+      const params = new URLSearchParams(rawBody);
+      const command = params.get("command");
+      const text    = (params.get("text") || "").trim();
+      const userId  = params.get("user_id");
+      const triggerId = params.get("trigger_id");
+
+      res.writeHead(200, { "Content-Type": "application/json" });
+
+      if (command === "/rambotravels") {
+        const [sub, ...rest] = text.split(/\s+/);
+
+        if (!sub || sub === "register") {
+          // Open registration modal.
+          await slackApi("views.open", {
+            trigger_id: triggerId,
+            view: buildTravelRegistrationModal(),
+          });
+          res.end(JSON.stringify({ response_type: "ephemeral", text: "" }));
+        } else if (sub === "summary" && rest.length > 0) {
+          const eventName = rest.join(" ");
+          handleTravelSummaryCommand(userId, eventName)
+            .catch((e) => console.error("Travel summary error:", e.message));
+          res.end(JSON.stringify({ response_type: "ephemeral", text: `Looking up *${eventName}* costs…` }));
+        } else if (sub === "cancel" && rest.length > 0) {
+          const eventName = rest.join(" ");
+          handleTravelCancelCommand(userId, eventName)
+            .catch((e) => console.error("Travel cancel error:", e.message));
+          res.end(JSON.stringify({ response_type: "ephemeral", text: `Cancelling *${eventName}*…` }));
+        } else {
+          res.end(JSON.stringify({
+            response_type: "ephemeral",
+            text: "Usage: `/rambotravels` · `/rambotravels summary DMEXCO` · `/rambotravels cancel DMEXCO`",
+          }));
+        }
+        return;
+      }
+
+      res.end(JSON.stringify({ response_type: "ephemeral", text: "Unknown command." }));
+      return;
+    }
+
     try {
       if (payload.type === "block_actions") {
         const action = payload.actions?.[0];
@@ -334,6 +399,24 @@ const server = http.createServer((req, res) => {
           await slackApi("views.open", {
             trigger_id: payload.trigger_id,
             view: buildModal(data),
+          });
+        }
+
+        // ── Travel: receipt confirmation buttons ──────────────────────────────
+        if (action?.action_id === "travel_receipts_done" || action?.action_id === "travel_receipts_none") {
+          const status = action.action_id === "travel_receipts_done" ? "done" : "none";
+          const meta   = JSON.parse(action.value || "{}");
+          handleTravelReceiptsConfirm({ userId: payload.user?.id, status, meta })
+            .catch((e) => console.error("Travel receipts confirm error:", e.message));
+          res.writeHead(200); res.end(); return;
+        }
+
+        // ── Travel: eshel amount modal ────────────────────────────────────────
+        if (action?.action_id === "travel_eshel_confirm") {
+          const meta = JSON.parse(action.value || "{}");
+          await slackApi("views.open", {
+            trigger_id: payload.trigger_id,
+            view: buildEshelAmountModal(meta),
           });
         }
 
@@ -418,6 +501,32 @@ const server = http.createServer((req, res) => {
         );
         return;
       }
+
+      if (payload.type === "view_submission" && payload.view?.callback_id === "travel_registration") {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ response_action: "clear" }));
+        const vals = payload.view.state.values;
+        const pick = (b, t = "value") => vals[b]?.val?.[t] ?? vals[b]?.val?.selected_option?.value ?? vals[b]?.val?.selected_user ?? null;
+        handleTravelRegistration({
+          submitterSlackId: payload.user?.id,
+          eventName:    pick("travel_event"),
+          employeeId:   pick("travel_employee"),
+          destination:  pick("travel_destination"),
+          departure:    pick("travel_departure", "selected_date"),
+          returnDate:   pick("travel_return",    "selected_date"),
+        }).catch((e) => console.error("Travel registration error:", e.message));
+        return;
+      }
+
+      if (payload.type === "view_submission" && payload.view?.callback_id === "travel_eshel_amount") {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ response_action: "clear" }));
+        const meta   = JSON.parse(payload.view.private_metadata || "{}");
+        const amount = payload.view.state.values?.eshel_amount?.val?.value || "";
+        handleEshelAmountSubmit({ meta, amount })
+          .catch((e) => console.error("Eshel amount submit error:", e.message));
+        return;
+      }
     } catch (e) {
       console.error("Interaction handler error:", e.message, e.stack);
     }
@@ -447,6 +556,7 @@ async function writeReceiptToSheet({ parsed, meta }) {
       sourceEmail: `slack:${meta.userName || "unknown"}`,
       invoiceLink: meta.invoiceLink || "",
       cardholder,
+      trip: meta.trip || "",
     })
   );
 
@@ -461,6 +571,231 @@ async function writeReceiptToSheet({ parsed, meta }) {
   } catch (e) {
     console.warn("Confirmation message failed:", e.message);
   }
+}
+
+// ── TRAVELS ───────────────────────────────────────────────────────────────────
+
+function buildTravelRegistrationModal() {
+  return {
+    type: "modal",
+    callback_id: "travel_registration",
+    title: { type: "plain_text", text: "Register Travel" },
+    submit: { type: "plain_text", text: "Register" },
+    close:  { type: "plain_text", text: "Cancel" },
+    blocks: [
+      textInput("travel_event",       "Event name",    null, "e.g. DMEXCO"),
+      {
+        type: "input", block_id: "travel_employee",
+        label: { type: "plain_text", text: "Employee" },
+        element: { type: "users_select", action_id: "val", placeholder: { type: "plain_text", text: "Select employee" } },
+      },
+      textInput("travel_destination", "Destination",   null, "e.g. Cologne, Germany"),
+      {
+        type: "input", block_id: "travel_departure",
+        label: { type: "plain_text", text: "Departure date" },
+        element: { type: "datepicker", action_id: "val" },
+      },
+      {
+        type: "input", block_id: "travel_return",
+        label: { type: "plain_text", text: "Return date" },
+        element: { type: "datepicker", action_id: "val" },
+      },
+    ],
+  };
+}
+
+function buildEshelAmountModal(meta) {
+  return {
+    type: "modal",
+    callback_id: "travel_eshel_amount",
+    private_metadata: JSON.stringify(meta),
+    title: { type: "plain_text", text: "Confirm Eshel" },
+    submit: { type: "plain_text", text: "Confirm" },
+    close:  { type: "plain_text", text: "Cancel" },
+    blocks: [
+      {
+        type: "section",
+        text: { type: "mrkdwn", text: `Enter the eshel amount transferred to *${meta.employeeName || "employee"}* for *${meta.eventName || "trip"}*:` },
+      },
+      textInput("eshel_amount", "Amount (₪)", null, "e.g. 1500"),
+    ],
+  };
+}
+
+async function handleTravelRegistration({ submitterSlackId, eventName, employeeId, destination, departure, returnDate }) {
+  const employeeName = await getSlackUserName(SLACK_TOKEN, employeeId);
+  const allRows      = await getTravelRows(SHEETS_ID);
+  const channel      = existingChannel(allRows, eventName)
+    ?? await createTripChannel(SLACK_TOKEN, eventName, departure);
+
+  await addEmployeeToChannel(SLACK_TOKEN, channel.channelId, employeeId);
+
+  const deadline = addDays(returnDate, 7);
+  await appendTravelRow(SHEETS_ID, {
+    employee:    employeeName,
+    slackId:     employeeId,
+    event:       eventName,
+    destination,
+    departureDate: departure,
+    returnDate,
+    ticketLink:  "",
+    channelId:   channel.channelId,
+    channelName: channel.channelName,
+    eshelStatus: "pending",
+    eshelAmount: "",
+    receiptsStatus: "pending",
+    employeeNotified:   false,
+    eshelT7Sent:        false,
+    eshelT3Sent:        false,
+    eshelT1Sent:        false,
+    departureNudgeSent: false,
+    returnNudgeSent:    false,
+    receiptsT7Sent:     false,
+  });
+
+  // DM the employee.
+  await slackApi("chat.postMessage", {
+    channel: employeeId,
+    text: employeeRegistrationMessage({
+      employeeName,
+      eventName,
+      destination,
+      departureDate: formatTravelDate(departure),
+      returnDate:    formatTravelDate(returnDate),
+      channelName:   channel.channelId,
+    }),
+  });
+
+  // DM Yulia with updated full roster for this event.
+  if (YULIA_SLACK_ID) {
+    const updatedRows = await getTravelRows(SHEETS_ID);
+    const eventEmployees = rowsForEvent(updatedRows, eventName);
+    await slackApi("chat.postMessage", {
+      channel: YULIA_SLACK_ID,
+      text: yuliaRosterUpdateMessage({
+        eventName,
+        destination,
+        employees: eventEmployees.map((r) => ({
+          employee:      r.employee,
+          departureDate: formatTravelDate(r.departureDate),
+          returnDate:    formatTravelDate(r.returnDate),
+        })),
+      }),
+    });
+  }
+
+  console.log(`Travel registered: ${employeeName} → ${eventName} (${departure} – ${returnDate}), channel: #${channel.channelName}`);
+}
+
+async function handleTravelChannelUpload(ev) {
+  // Check if this channel belongs to a trip.
+  const allRows = await getTravelRows(SHEETS_ID);
+  const tripRow = allRows.find((r) => r.channelId === ev.channel);
+  if (!tripRow) {
+    // Not a known travel channel — fall through to regular intake.
+    return handleIncomingMessage(ev);
+  }
+  // Process as a regular receipt but pass the trip tag through meta.
+  return handleIncomingMessage(ev, { trip: tripRow.event });
+}
+
+async function handleTravelReceiptsConfirm({ userId, status, meta }) {
+  const allRows = await getTravelRows(SHEETS_ID);
+  const row = allRows.find((r) => r.slackId === userId && r.event === meta.eventName);
+  if (!row) return;
+
+  await updateTravelRow(SHEETS_ID, row.rowNumber, { ...row, receiptsStatus: status });
+
+  const label = status === "done" ? "confirmed all receipts uploaded" : "confirmed no receipts to upload";
+  if (YULIA_SLACK_ID) {
+    await slackApi("chat.postMessage", {
+      channel: YULIA_SLACK_ID,
+      text: `✅ *${row.employee}* ${label} for *${meta.eventName}*.`,
+    });
+  }
+
+  // If all employees on the trip have confirmed, archive the channel.
+  const refreshed  = await getTravelRows(SHEETS_ID);
+  const tripRows   = rowsForEvent(refreshed, meta.eventName);
+  const allDone    = tripRows.every((r) => r.receiptsStatus === "done" || r.receiptsStatus === "none");
+  if (allDone && row.channelId) {
+    const { archiveTripChannel } = await import("./src/travels/travelsSlack.js");
+    await archiveTripChannel(SLACK_TOKEN, row.channelId);
+    console.log(`All ${meta.eventName} receipts confirmed — channel archived.`);
+  }
+}
+
+async function handleEshelAmountSubmit({ meta, amount }) {
+  if (YULIA_SLACK_ID) {
+    await slackApi("chat.postMessage", {
+      channel: YULIA_SLACK_ID,
+      text: `✅ Eshel for *${meta.employeeName}* marked as confirmed — ₪${amount} transferred.`,
+    });
+  }
+  // DM the employee.
+  if (meta.employeeSlackId) {
+    await slackApi("chat.postMessage", {
+      channel: meta.employeeSlackId,
+      text: `Hey ${meta.employeeName}! 💸 Your travel allowance (eshel) of *₪${amount}* for *${meta.eventName}* has been deposited. Have a great trip!`,
+    });
+  }
+  // Mark eshel confirmed in the sheet.
+  const allRows = await getTravelRows(SHEETS_ID);
+  const row = allRows.find((r) => r.slackId === meta.employeeSlackId && r.event === meta.eventName);
+  if (row) {
+    await updateTravelRow(SHEETS_ID, row.rowNumber, { ...row, eshelStatus: "confirmed", eshelAmount: amount });
+  }
+}
+
+async function handleTravelSummaryCommand(requestingUserId, eventName) {
+  const allRows = await getTravelRows(SHEETS_ID);
+  const { rows, pendingEmployees } = await buildTripSummary(SHEETS_ID, eventName, allRows);
+  const summaryRows = rows.map((r) => ({
+    ...r,
+    totalIls: r.totalIls,
+    totalsLabel: formatTotals(r.totals),
+    receipts: r.receipts,
+  }));
+  const text = tripCostSummaryMessage({ eventName, rows: summaryRows, pendingEmployees });
+  await slackApi("chat.postMessage", { channel: requestingUserId, text });
+}
+
+async function handleTravelCancelCommand(requestingUserId, eventName) {
+  const allRows  = await getTravelRows(SHEETS_ID);
+  const tripRows = rowsForEvent(allRows, eventName);
+  if (tripRows.length === 0) {
+    await slackApi("chat.postMessage", { channel: requestingUserId, text: `No trip found for *${eventName}*.` });
+    return;
+  }
+
+  // Notify each employee.
+  for (const row of tripRows) {
+    if (row.slackId) {
+      await slackApi("chat.postMessage", {
+        channel: row.slackId,
+        text: tripCancelledToEmployeeMessage({ employeeName: row.employee, eventName }),
+      });
+    }
+    await updateTravelRow(SHEETS_ID, row.rowNumber, { ...row, receiptsStatus: "cancelled", eshelStatus: "na" });
+  }
+
+  // Notify Yulia.
+  if (YULIA_SLACK_ID) {
+    await slackApi("chat.postMessage", {
+      channel: YULIA_SLACK_ID,
+      text: tripCancelledToYuliaMessage({ eventName, employeeNames: tripRows.map((r) => r.employee) }),
+    });
+  }
+
+  // Archive channel.
+  const channelId = tripRows.find((r) => r.channelId)?.channelId;
+  if (channelId) {
+    const { archiveTripChannel } = await import("./src/travels/travelsSlack.js");
+    await archiveTripChannel(SLACK_TOKEN, channelId);
+  }
+
+  await slackApi("chat.postMessage", { channel: requestingUserId, text: `✅ *${eventName}* cancelled, employees notified, channel archived.` });
+  console.log(`Trip cancelled: ${eventName}`);
 }
 
 // ── STATEMENT UPLOAD HANDLER ─────────────────────────────────────────────────
@@ -738,7 +1073,7 @@ async function handleDmReceipt(msg) {
 // doesn't double-post the button when the Events API already handled it.
 const recentlyProcessed = new Set();
 
-async function handleIncomingMessage(msg) {
+async function handleIncomingMessage(msg, { trip = "" } = {}) {
   const files = msg.files || [];
   if (!files.length) return;
 
@@ -767,7 +1102,7 @@ async function handleIncomingMessage(msg) {
   const userName = msg.user ? await getSlackUserName(SLACK_TOKEN, msg.user) : "unknown";
   for (const file of files) {
     try {
-      await processSlackFile({ file, msg, userName });
+      await processSlackFile({ file, msg, userName, trip });
     } catch (e) {
       console.error(`Error processing "${file.name}" from ${userName}:`, e.message);
       appendErrorRow(SHEETS_ID, {
@@ -784,7 +1119,7 @@ async function handleIncomingMessage(msg) {
 
 // ── POLLING LOOP ──────────────────────────────────────────────────────────────
 
-async function processSlackFile({ file, msg, userName }) {
+async function processSlackFile({ file, msg, userName, trip = "" }) {
   const mimeType = normaliseMime(file.mimetype);
   if (!SUPPORTED_MIME_TYPES.has(mimeType)) {
     console.warn(`Skipping unsupported file "${file.name}" (${file.mimetype})`);
@@ -837,7 +1172,7 @@ async function processSlackFile({ file, msg, userName }) {
   // Slack button value limit is 2000 chars — truncate notes if needed.
   if (prepped.notes && prepped.notes.length > 150) prepped.notes = prepped.notes.slice(0, 150);
 
-  const meta = { invoiceLink, channelId: CHANNEL_ID, userId: msg.user, userName, msgTs: msg.ts };
+  const meta = { invoiceLink, channelId: msg.channel || CHANNEL_ID, userId: msg.user, userName, msgTs: msg.ts, trip };
 
   await slackApi("chat.postMessage", {
     channel: CHANNEL_ID,

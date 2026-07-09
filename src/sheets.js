@@ -160,8 +160,8 @@ function creditCardLabel(last4, currency, cardInfo) {
 // Column order per Master Doc §4:
 // Captured at · Source · Expense type · Date · Currency · Amount · Paid by ·
 // Credit card · Cardholder · Provider · Receipt No. · Comments · Invoice link ·
-// Status · Matched CC txn · Document type
-export function buildReceiptRow({ parsed, sourceEmail, invoiceLink, cardholder = "" }) {
+// Status · Matched CC txn · Document type · Trip
+export function buildReceiptRow({ parsed, sourceEmail, invoiceLink, cardholder = "", trip = "" }) {
   const cell = (v) => (v === null || v === undefined ? "" : v);
   // Prefix formula-like values with a single quote so Sheets treats them as text.
   const sanitize = (v) => { const s = String(cell(v)); return s && /^[=+\-@]/.test(s) ? `'${s}` : s; };
@@ -191,5 +191,6 @@ export function buildReceiptRow({ parsed, sourceEmail, invoiceLink, cardholder =
     "Pending",                       // N: Status
     "",                              // O: Matched CC txn
     sanitize(parsed.document_type),  // P: Document type (receipt / invoice / other)
+    sanitize(trip),                  // Q: Trip (event name, e.g. "DMEXCO")
   ];
 }
