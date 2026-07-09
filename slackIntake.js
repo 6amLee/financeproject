@@ -338,15 +338,6 @@ const server = http.createServer((req, res) => {
       return;
     }
 
-    // ── Interactions ─────────────────────────────────────────────────────────
-    let payload;
-    try {
-      payload = JSON.parse(new URLSearchParams(rawBody).get("payload") || "{}");
-    } catch (e) {
-      console.error("Failed to parse Slack payload:", e.message);
-      res.writeHead(400); res.end(); return;
-    }
-
     // ── Slash commands (/rambotravels) ───────────────────────────────────────
     if (isCommands) {
       const params = new URLSearchParams(rawBody);
@@ -361,12 +352,12 @@ const server = http.createServer((req, res) => {
         const [sub, ...rest] = text.split(/\s+/);
 
         if (!sub || sub === "register") {
-          // Open registration modal.
-          await slackApi("views.open", {
+          // Ack Slack immediately — must respond within 3s.
+          res.end(JSON.stringify({ response_type: "ephemeral", text: "" }));
+          slackApi("views.open", {
             trigger_id: triggerId,
             view: buildTravelRegistrationModal(),
-          });
-          res.end(JSON.stringify({ response_type: "ephemeral", text: "" }));
+          }).catch((e) => console.error("Travel modal open failed:", e.message));
         } else if (sub === "summary" && rest.length > 0) {
           const eventName = rest.join(" ");
           handleTravelSummaryCommand(userId, eventName)
@@ -388,6 +379,15 @@ const server = http.createServer((req, res) => {
 
       res.end(JSON.stringify({ response_type: "ephemeral", text: "Unknown command." }));
       return;
+    }
+
+    // ── Interactions ─────────────────────────────────────────────────────────
+    let payload;
+    try {
+      payload = JSON.parse(new URLSearchParams(rawBody).get("payload") || "{}");
+    } catch (e) {
+      console.error("Failed to parse Slack payload:", e.message);
+      res.writeHead(400); res.end(); return;
     }
 
     try {
