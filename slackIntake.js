@@ -353,7 +353,7 @@ const server = http.createServer((req, res) => {
 
         if (!sub || sub === "register") {
           // Ack Slack immediately — must respond within 3s.
-          res.end(JSON.stringify({ response_type: "ephemeral", text: "" }));
+          res.writeHead(200); res.end();
           slackApi("views.open", {
             trigger_id: triggerId,
             view: buildTravelRegistrationModal(),
@@ -628,7 +628,7 @@ async function handleTravelRegistration({ submitterSlackId, eventName, employeeI
   const channel      = existingChannel(allRows, eventName)
     ?? await createTripChannel(SLACK_TOKEN, eventName, departure);
 
-  await addEmployeeToChannel(SLACK_TOKEN, channel.channelId, employeeId);
+  await addEmployeeToChannel(SLACK_TOKEN, channel.channelId, employeeId).catch(() => {});
 
   // Also add the submitter if different from the employee (e.g. Lee registering Aviv's trip).
   if (submitterSlackId && submitterSlackId !== employeeId) {
