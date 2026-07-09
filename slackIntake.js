@@ -630,6 +630,11 @@ async function handleTravelRegistration({ submitterSlackId, eventName, employeeI
 
   await addEmployeeToChannel(SLACK_TOKEN, channel.channelId, employeeId);
 
+  // Also add the submitter if different from the employee (e.g. Lee registering Aviv's trip).
+  if (submitterSlackId && submitterSlackId !== employeeId) {
+    await addEmployeeToChannel(SLACK_TOKEN, channel.channelId, submitterSlackId).catch(() => {});
+  }
+
   const deadline = addDays(returnDate, 7);
   await appendTravelRow(SHEETS_ID, {
     employee:    employeeName,
