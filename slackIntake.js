@@ -32,6 +32,7 @@ import {
 import { appendStatementChaseThread, getStatementChaseThreads, updateStatementChaseThread } from "./src/rambo/statementChase.js";
 import { appendStatementRun } from "./src/rambo/statementRuns.js";
 import { resolveSlackId } from "./src/rambo/slackIds.js";
+import { appendLedgerEntry } from "./src/rambo/ledger.js";
 
 if (typeof process.loadEnvFile === "function") {
   try { process.loadEnvFile(); } catch { /* no .env file — fine */ }
@@ -451,6 +452,20 @@ async function writeReceiptToSheet({ parsed, meta }) {
   );
 
   console.log(`Receipt submitted: ${parsed.provider} · ${parsed.amount} ${parsed.currency} by ${meta.userName}`);
+
+  // Teach the ownership resolver: every confirmed company-card receipt is a
+  // confirmed vendor→owner association. Only Organization expenses appear on
+  // the statement, so personal-card receipts are skipped.
+  if (parsed.provider && parsed.paid_by === "Organization") {
+    appendLedgerEntry(SHEETS_ID, {
+      vendor:           parsed.provider,
+      card:             parsed.cc_last4 || "",
+      resolvedOwner:    meta.userName,
+      resolvedAt:       new Date().toISOString(),
+      resolutionSource: "intake",
+      confirmed:        true,
+    }).catch((e) => console.warn("Ledger entry failed (non-fatal):", e.message));
+  }
 
   try {
     await slackApi("chat.postMessage", {
