@@ -8,8 +8,13 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - name: Deploy to Railway
-        run: npx @railway/cli@latest up --service "rambo (finance)" --detach
+      - name: Trigger Railway redeploy
+        run: |
+          curl -sf -X POST https://backboard.railway.app/graphql/v2 \
+            -H "Authorization: Bearer $RAILWAY_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{\"query\":\"mutation { deploymentRedeploy(id: \\\"$RAILWAY_DEPLOYMENT_ID\\\") { id status } }\"}" \
+            | tee /dev/stderr | grep -q '"id"'
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          RAILWAY_DEPLOYMENT_ID: ${{ secrets.RAILWAY_DEPLOYMENT_ID }}
