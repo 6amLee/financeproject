@@ -1180,7 +1180,7 @@ async function processSlackFile({ file, msg, userName, trip = "" }) {
   const meta = { invoiceLink, channelId: msg.channel || CHANNEL_ID, userId: msg.user, userName, msgTs: msg.ts, trip };
 
   await slackApi("chat.postMessage", {
-    channel: CHANNEL_ID,
+    channel: meta.channelId,
     thread_ts: msg.ts,
     text: `Receipt from ${userName} — click to fill in details`,
     blocks: [
