@@ -65,6 +65,15 @@ function getClient() {
   return _client;
 }
 
+// Claude sometimes wraps JSON in markdown code fences despite being told not
+// to (Master Doc §9 gotcha 4) — strip them before parsing.
+function parseJsonLoose(rawText) {
+  let text = rawText.trim();
+  const fenceMatch = text.match(/^```(?:json)?\s*\n?([\s\S]*?)\n?\s*```$/);
+  if (fenceMatch) text = fenceMatch[1].trim();
+  return JSON.parse(text);
+}
+
 export async function extractReceiptData({ mimeType, base64Data, textBody, context }) {
   const content = buildContentBlocks({ mimeType, base64Data, textBody, context });
 
@@ -106,12 +115,12 @@ export async function findMatchingTripName(newEventName, existingEventNames) {
   if (!textBlock) return null;
 
   try {
-    const parsed = JSON.parse(textBlock.text.trim());
+    const parsed = parseJsonLoose(textBlock.text);
     if (parsed.confidence === "high" && existingEventNames.includes(parsed.match)) {
       return parsed.match;
     }
-  } catch {
-    // Malformed response — fail safe to "no match", don't block registration.
+  } catch (e) {
+    console.warn(`findMatchingTripName: malformed Claude response — ${e.message}`);
   }
   return null;
 }
@@ -144,11 +153,12 @@ export async function classifyTravelQuestion(question, existingEventNames) {
   if (!textBlock) return { intent: null, eventName: null };
 
   try {
-    const parsed = JSON.parse(textBlock.text.trim());
+    const parsed = parseJsonLoose(textBlock.text);
     const intent = ["roster", "cost"].includes(parsed.intent) ? parsed.intent : null;
     const eventName = existingEventNames.includes(parsed.eventName) ? parsed.eventName : null;
     return { intent, eventName };
-  } catch {
+  } catch (e) {
+    console.warn(`classifyTravelQuestion: malformed Claude response — ${e.message}`);
     return { intent: null, eventName: null };
   }
 }

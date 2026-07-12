@@ -772,7 +772,13 @@ async function handleTravelQuestionDm(ev) {
   const distinctNames = [...new Set(allRows.map((r) => r.event).filter(Boolean))];
   if (!distinctNames.length) return;
 
-  const { intent, eventName } = await classifyTravelQuestion(ev.text.trim(), distinctNames).catch(() => ({ intent: null, eventName: null }));
+  // Strip Slack's "<@U0ABC123>" mention tokens — just noise for the classifier.
+  const question = ev.text.replace(/<@[A-Z0-9]+>/g, "").trim();
+
+  const { intent, eventName } = await classifyTravelQuestion(question, distinctNames).catch((e) => {
+    console.warn("classifyTravelQuestion call failed:", e.message);
+    return { intent: null, eventName: null };
+  });
 
   if (!intent || !eventName) {
     await slackApi("chat.postMessage", { channel: ev.channel, text: unknownTravelQuestionMessage() }).catch(() => {});
