@@ -19,6 +19,7 @@ import {
   appendReceiptRow,
   buildReceiptRow,
   appendErrorRow,
+  appendUnansweredQuestion,
   getSlackIntakeCursor,
   setSlackIntakeCursor,
   setReceiptStatus,
@@ -75,7 +76,12 @@ const SIGNING_SECRET    = process.env.SLACK_SIGNING_SECRET || "";
 const POLL_INTERVAL_MIN   = Number(process.env.SLACK_INTAKE_POLL_MINUTES) || 5;
 const STATEMENTS_CHANNEL  = process.env.SLACK_STATEMENTS_CHANNEL || "";
 const YULIA_SLACK_ID      = process.env.YULIA_SLACK_ID || "";
+const FINANCE_ADMIN_SLACK_ID = process.env.FINANCE_ADMIN_SLACK_ID || "";
 const STATEMENT_DRY_RUN   = process.env.STATEMENT_DRY_RUN === "true";
+
+// Who's allowed to ask Rambo natural-language travel questions in a DM —
+// intentionally narrow (financial cost data), not "anyone @truvid.com".
+const TRAVEL_QA_ALLOWED_IDS = new Set([YULIA_SLACK_ID, FINANCE_ADMIN_SLACK_ID].filter(Boolean));
 
 const MAX_FILE_BYTES = 10 * 1024 * 1024; // 10 MB — receipts should never be larger
 
@@ -784,11 +790,11 @@ async function registerTrip({ submitterSlackId, eventName, employeeId, destinati
 
 // Handles a plain-text DM asking a natural-language question about a trip,
 // e.g. "who's going to Programmatic NY?", "how much did DMEXCO cost?", or
-// "when is Aviad's flight for DMEXCO?". Restricted to @truvid.com accounts,
-// same bar as receipt submission — anyone else's DM is silently ignored.
+// "when is Aviad's flight for DMEXCO?". Restricted to Yulia and the finance
+// admin only (TRAVEL_QA_ALLOWED_IDS) — this exposes trip costs, so it's a
+// narrower allowlist than the @truvid.com bar used for receipt submission.
 async function handleTravelQuestionDm(ev) {
-  const isAuthorized = ev.user === YULIA_SLACK_ID || (await verifyTruvid(ev.user));
-  if (!isAuthorized) return;
+  if (!TRAVEL_QA_ALLOWED_IDS.has(ev.user)) return;
 
   const allRows = await getTravelRows(SHEETS_ID);
   const distinctNames = [...new Set(allRows.map((r) => r.event).filter(Boolean))];
@@ -806,6 +812,9 @@ async function handleTravelQuestionDm(ev) {
 
   if (!intent || !eventName) {
     await slackApi("chat.postMessage", { channel: ev.channel, text: unknownTravelQuestionMessage() }).catch(() => {});
+    appendUnansweredQuestion(SHEETS_ID, {
+      askerUserId: ev.user, question, guessedIntent: intent, guessedEventName: eventName, guessedEmployeeName: employeeName,
+    }).catch((e) => console.warn("appendUnansweredQuestion failed:", e.message));
     return;
   }
 
@@ -819,6 +828,11 @@ async function handleTravelQuestionDm(ev) {
     const tripRows = rowsForEvent(allRows, eventName);
     const row = employeeName ? tripRows.find((r) => r.employee === employeeName) : null;
     await slackApi("chat.postMessage", { channel: ev.channel, text: employeeDetailMessage({ eventName, row }) }).catch(() => {});
+    if (!row) {
+      appendUnansweredQuestion(SHEETS_ID, {
+        askerUserId: ev.user, question, guessedIntent: intent, guessedEventName: eventName, guessedEmployeeName: employeeName,
+      }).catch((e) => console.warn("appendUnansweredQuestion failed:", e.message));
+    }
     return;
   }
 

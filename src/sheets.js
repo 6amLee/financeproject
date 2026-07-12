@@ -70,6 +70,39 @@ export function appendErrorRow(sheetId, { service, messageId, sender, subject, a
   return task;
 }
 
+// "Unanswered Questions" tab — every travel DM question Rambo couldn't
+// confidently answer (no intent, or no matching trip/employee). Reviewed
+// periodically to decide which should become a new supported intent.
+// Columns: Logged at · Asker · Question · Guessed intent · Guessed event ·
+// Guessed employee
+const UNANSWERED_QUESTIONS_SHEET = "Unanswered Questions";
+
+export function appendUnansweredQuestion(sheetId, { askerUserId, question, guessedIntent, guessedEventName, guessedEmployeeName }) {
+  const task = _sheetsWriteQueue.then(() =>
+    getSheets().spreadsheets.values.append({
+      spreadsheetId: sheetId,
+      range: `'${UNANSWERED_QUESTIONS_SHEET}'!A1`,
+      valueInputOption: "RAW",
+      insertDataOption: "INSERT_ROWS",
+      requestBody: {
+        values: [[
+          new Date().toISOString(),
+          askerUserId || "",
+          question || "",
+          guessedIntent || "",
+          guessedEventName || "",
+          guessedEmployeeName || "",
+        ]],
+      },
+    })
+  );
+  _sheetsWriteQueue = task.then(
+    () => {},
+    (e) => console.error("Unanswered Questions append failed:", e.message)
+  );
+  return task;
+}
+
 export function appendReceiptRow(sheetId, rowValues) {
   const task = _sheetsWriteQueue.then(() =>
     getSheets().spreadsheets.values.append({
