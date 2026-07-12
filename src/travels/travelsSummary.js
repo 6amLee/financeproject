@@ -11,7 +11,7 @@ import { google } from "googleapis";
 import { getGoogleAuth } from "../googleAuth.js";
 import { MASTER_COL } from "../rambo/matcher.js";
 
-const MASTER_DB_RANGE = "'Master DB'!A2:Q";
+const MASTER_DB_RANGE = "'Master DB'!A2:R";
 
 let _sheets = null;
 function getSheets() {
@@ -38,10 +38,14 @@ export async function buildTripSummary(sheetId, eventName, travelRows) {
     (row) => norm(row[MASTER_COL.trip] ?? "") === normEvent
   );
 
-  // Group by cardholder (employee who submitted).
+  // Group by traveler — who the expense is FOR, not who paid or who uploaded
+  // it (those can differ, e.g. Ron's card paying for Aviad's flight, or Lee
+  // submitting a receipt on Roee's behalf). Falls back to cardholder/source
+  // only for older rows written before the Traveler column existed.
   const byEmployee = new Map();
   for (const row of tripReceipts) {
-    const employee = String(row[MASTER_COL.cardholder] ?? row[MASTER_COL.source] ?? "Unknown").trim();
+    const traveler = String(row[MASTER_COL.traveler] ?? "").trim();
+    const employee = traveler || String(row[MASTER_COL.cardholder] ?? row[MASTER_COL.source] ?? "Unknown").trim();
     const provider = String(row[MASTER_COL.provider] ?? "").trim();
     const amount   = parseFloat(String(row[MASTER_COL.amount] ?? "").replace(/,/g, "")) || 0;
     const currency = String(row[MASTER_COL.currency] ?? "ILS").trim().toUpperCase();

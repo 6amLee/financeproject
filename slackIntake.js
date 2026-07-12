@@ -201,6 +201,7 @@ function buildConfirmView({ parsed, meta }) {
     `*Expense Type:* ${p.expense_type || "—"}`,
     `*Paid By:* ${p.paid_by || "—"}`,
     ...(p.paid_by === "Organization" ? [`*Credit Card:* ${ccLabel || "—"}`] : []),
+    ...(p.traveler ? [`*Traveler:* ${p.traveler}`] : []),
     ...(p.receipt_no ? [`*Receipt / Invoice #:* ${p.receipt_no}`] : []),
     ...(p.notes ? [`*Notes:* ${p.notes}`] : []),
     ...(meta?.invoiceLink ? [`*Document:* <${meta.invoiceLink}|View in Drive>`] : []),
@@ -226,10 +227,26 @@ function buildConfirmView({ parsed, meta }) {
   };
 }
 
-function buildModal({ prepped, meta }) {
+async function buildModal({ prepped, meta }) {
   const p = prepped || {};
   // CC field is hidden when the submitter is paying personally — no company card involved.
   const showCC = p.paid_by !== "Employee";
+
+  // For trip receipts, ask who the expense is FOR — the cardholder or Slack
+  // submitter often isn't the traveler (e.g. Ron's card paying for Aviad's
+  // flight, or Lee submitting a receipt on Roee's behalf).
+  let travelerField = [];
+  if (meta?.trip) {
+    const allRows = await getTravelRows(SHEETS_ID).catch(() => []);
+    const tripEmployees = rowsForEvent(allRows, meta.trip).map((r) => r.employee).filter(Boolean);
+    if (tripEmployees.length) {
+      travelerField = [selectInput("traveler", "Traveler (who is this expense for?)",
+        tripEmployees.map((e) => opt(e)),
+        p.traveler || (tripEmployees.includes(meta.userName) ? meta.userName : null),
+        "Select traveler")];
+    }
+  }
+
   return {
     type: "modal",
     callback_id: "receipt_form",
@@ -276,6 +293,7 @@ function buildModal({ prepped, meta }) {
       },
       ...(showCC ? [selectInput("cc_last4", "Credit Card (required for organization expenses)",
         CC_OPTIONS, p.cc_last4, "Select card")] : []),
+      ...travelerField,
       textInput("receipt_no", "Receipt / Invoice # (optional)", p.receipt_no, "as printed on document", true),
       textInput("notes", "Notes (optional)", p.notes, "Any additional context", true, true),
     ],
@@ -405,7 +423,7 @@ const server = http.createServer((req, res) => {
           const data = JSON.parse(action.value);
           await slackApi("views.open", {
             trigger_id: payload.trigger_id,
-            view: buildModal(data),
+            view: await buildModal(data),
           });
         }
 
@@ -452,11 +470,12 @@ const server = http.createServer((req, res) => {
             cc_last4:     cv.cc_last4?.val?.selected_option?.value ?? null,
             receipt_no:   cv.receipt_no?.val?.value ?? null,
             notes:        cv.notes?.val?.value ?? null,
+            traveler:     cv.traveler?.val?.selected_option?.value ?? null,
           };
           const meta = JSON.parse(payload.view?.private_metadata || "{}");
           await slackApi("views.update", {
             view_id: payload.view.id,
-            view: buildModal({ prepped: currentPrepped, meta }),
+            view: await buildModal({ prepped: currentPrepped, meta }),
           });
         }
 
@@ -500,6 +519,7 @@ const server = http.createServer((req, res) => {
           cc_last4:     cc || null,
           receipt_no:   pick("receipt_no") || null,
           notes:        pick("notes") || null,
+          traveler:     pick("traveler") || null,
         };
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({
@@ -575,6 +595,7 @@ async function writeReceiptToSheet({ parsed, meta }) {
       invoiceLink: meta.invoiceLink || "",
       cardholder,
       trip: meta.trip || "",
+      traveler: parsed.traveler || "",
     })
   );
 

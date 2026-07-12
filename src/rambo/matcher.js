@@ -32,6 +32,7 @@ export const MASTER_COL = {
   matchedCcTxn: 14,
   documentType: 15,
   trip: 16,
+  traveler: 17,
 };
 
 // Expense types where the statement amount may exceed the receipt amount by
