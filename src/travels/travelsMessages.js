@@ -137,6 +137,22 @@ export function tripCostSummaryMessage({ eventName, rows, pendingEmployees }) {
   );
 }
 
+// ── NATURAL-LANGUAGE Q&A (DM) ─────────────────────────────────────────────────
+
+export function tripRosterMessage({ eventName, rows }) {
+  if (rows.length === 0) {
+    return `No one is currently registered for *${eventName}*.`;
+  }
+  const lines = rows.map(
+    (r) => `• *${r.employee}* — ${formatTravelDate(r.departureDate)} → ${formatTravelDate(r.returnDate)}`
+  );
+  return `*${eventName} — Roster*\n${lines.join("\n")}`;
+}
+
+export function unknownTravelQuestionMessage() {
+  return "I couldn't tell which trip you're asking about, or what you'd like to know. Try something like \"who's going to DMEXCO?\" or \"how much did DMEXCO cost?\"";
+}
+
 // ── SHARED HELPERS ────────────────────────────────────────────────────────────
 
 function receiptConfirmButtons() {

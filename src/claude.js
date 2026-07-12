@@ -78,3 +78,77 @@ export async function extractReceiptData({ mimeType, base64Data, textBody, conte
   if (!textBlock) throw new Error("Claude response contained no text block");
   return textBlock.text;
 }
+
+// Given a new trip/event name and the list of distinct existing event names,
+// returns the existing name it most likely refers to (e.g. "Programmatic NY"
+// vs "Programmatic New York"), or null if none is a plausible match.
+export async function findMatchingTripName(newEventName, existingEventNames) {
+  if (!existingEventNames.length) return null;
+
+  const prompt =
+    `A finance bot is registering a new company trip named "${newEventName}". ` +
+    `Here is the list of existing trip names already in the system:\n` +
+    existingEventNames.map((n) => `- ${n}`).join("\n") +
+    `\n\nIs "${newEventName}" very likely referring to the SAME trip as one of these existing names ` +
+    `(e.g. an abbreviation, alternate spelling, or reordering of the same event/destination)? ` +
+    `Output ONLY a raw JSON object starting with a left brace and ending with a right brace, no code fences. ` +
+    `Keys: match (the exact existing name string it matches, or null if none plausibly match), confidence (high or low). ` +
+    `Only return a match with confidence "high" if you are quite sure — different trips to the same city in different ` +
+    `months, or genuinely different events, should return null.`;
+
+  const response = await getClient().messages.create({
+    model: "claude-haiku-4-5",
+    max_tokens: 256,
+    messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
+  });
+
+  const textBlock = (response.content || []).find((b) => b.type === "text");
+  if (!textBlock) return null;
+
+  try {
+    const parsed = JSON.parse(textBlock.text.trim());
+    if (parsed.confidence === "high" && existingEventNames.includes(parsed.match)) {
+      return parsed.match;
+    }
+  } catch {
+    // Malformed response — fail safe to "no match", don't block registration.
+  }
+  return null;
+}
+
+// Classifies a free-text DM question about travel (e.g. "who's going to
+// Programmatic NY?" or "how much did DMEXCO cost so far?") against the list
+// of known trip event names. Returns { intent, eventName } where intent is
+// "roster", "cost", or null if the question isn't a recognisable travel
+// question or doesn't match any known trip. Claude only classifies — actual
+// numbers/rosters always come from the sheet, never from the model.
+export async function classifyTravelQuestion(question, existingEventNames) {
+  if (!existingEventNames.length) return { intent: null, eventName: null };
+
+  const prompt =
+    `A Slack bot handles questions about company trips. Known trip names:\n` +
+    existingEventNames.map((n) => `- ${n}`).join("\n") +
+    `\n\nUser's question: "${question}"\n\n` +
+    `Output ONLY a raw JSON object starting with a left brace and ending with a right brace, no code fences. ` +
+    `Keys: intent (one of "roster" — asking who is/was attending a trip; "cost" — asking how much a trip cost or spent; ` +
+    `or null if this isn't a travel question or you can't tell), ` +
+    `eventName (the exact matching name from the known trip list above, or null if no trip is clearly referenced or none match).`;
+
+  const response = await getClient().messages.create({
+    model: "claude-haiku-4-5",
+    max_tokens: 256,
+    messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
+  });
+
+  const textBlock = (response.content || []).find((b) => b.type === "text");
+  if (!textBlock) return { intent: null, eventName: null };
+
+  try {
+    const parsed = JSON.parse(textBlock.text.trim());
+    const intent = ["roster", "cost"].includes(parsed.intent) ? parsed.intent : null;
+    const eventName = existingEventNames.includes(parsed.eventName) ? parsed.eventName : null;
+    return { intent, eventName };
+  } catch {
+    return { intent: null, eventName: null };
+  }
+}

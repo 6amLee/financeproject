@@ -12,7 +12,7 @@
 import http from "http";
 import crypto from "crypto";
 import { getChannelHistory, downloadSlackFile, getSlackUserName, slackPost } from "./src/slackIntake.js";
-import { extractReceiptData } from "./src/claude.js";
+import { extractReceiptData, findMatchingTripName, classifyTravelQuestion } from "./src/claude.js";
 import { parseClaudeJson } from "./src/parseJson.js";
 import { uploadToDrive, downloadDriveFile } from "./src/drive.js";
 import {
@@ -42,6 +42,8 @@ import {
   tripCancelledToEmployeeMessage,
   tripCancelledToYuliaMessage,
   tripCostSummaryMessage,
+  tripRosterMessage,
+  unknownTravelQuestionMessage,
   formatTravelDate,
   addDays,
 } from "./src/travels/travelsMessages.js";
@@ -317,6 +319,8 @@ const server = http.createServer((req, res) => {
       if (event.type === "event_callback") {
         res.writeHead(200); res.end();
         const ev = event.event;
+        if (ev?.bot_id || ev?.subtype === "bot_message") return; // ignore our own / other bots' messages
+
         if (ev?.files?.length) {
           const isStatements = STATEMENTS_CHANNEL && ev.channel === STATEMENTS_CHANNEL;
           const isDm         = !isStatements && ev.channel?.startsWith("D");
@@ -331,6 +335,8 @@ const server = http.createServer((req, res) => {
           } else {
             handleIncomingMessage(ev).catch((e) => console.error("Event handler error:", e.message));
           }
+        } else if (ev?.type === "message" && ev.channel?.startsWith("D") && ev.text?.trim()) {
+          handleTravelQuestionDm(ev).catch((e) => console.error("Event handler error:", e.message));
         }
         return;
       }
@@ -418,6 +424,17 @@ const server = http.createServer((req, res) => {
             trigger_id: payload.trigger_id,
             view: buildEshelAmountModal(meta),
           });
+        }
+
+        // ── Travel: duplicate-trip name confirmation ──────────────────────────
+        if (action?.action_id === "travel_dedupe_use_existing" || action?.action_id === "travel_dedupe_create_new") {
+          const meta = JSON.parse(action.value || "{}");
+          const { submitterSlackId, employeeId, destination, departure, returnDate, likelyMatch } = meta;
+          const eventName = action.action_id === "travel_dedupe_use_existing" ? likelyMatch : meta.eventName;
+          res.writeHead(200); res.end();
+          registerTrip({ submitterSlackId, eventName, employeeId, destination, departure, returnDate })
+            .catch((e) => console.error("Travel registration error:", e.message));
+          return;
         }
 
         // Paid By changed — re-render modal to show/hide CC field.
@@ -623,6 +640,57 @@ function buildEshelAmountModal(meta) {
 }
 
 async function handleTravelRegistration({ submitterSlackId, eventName, employeeId, destination, departure, returnDate }) {
+  const allRows = await getTravelRows(SHEETS_ID);
+
+  // Exact name match (case/whitespace-insensitive) — proceed straight away.
+  if (!existingChannel(allRows, eventName)) {
+    // No exact match — check if this looks like the same trip under a
+    // different name (e.g. "Programmatic NY" vs "Programmatic New York")
+    // before creating a brand new channel/row for it.
+    const distinctNames = [...new Set(allRows.map((r) => r.event).filter(Boolean))];
+    const likelyMatch = await findMatchingTripName(eventName, distinctNames).catch(() => null);
+
+    if (likelyMatch) {
+      const meta = { submitterSlackId, eventName, employeeId, destination, departure, returnDate, likelyMatch };
+      await slackApi("chat.postMessage", {
+        channel: submitterSlackId,
+        text: `You're registering *${eventName}* — did you mean the existing trip *${likelyMatch}*?`,
+        blocks: [
+          {
+            type: "section",
+            text: {
+              type: "mrkdwn",
+              text: `You're registering *${eventName}* — did you mean the existing trip *${likelyMatch}*?`,
+            },
+          },
+          {
+            type: "actions",
+            elements: [
+              {
+                type: "button",
+                text: { type: "plain_text", text: `Use existing "${likelyMatch}"` },
+                style: "primary",
+                action_id: "travel_dedupe_use_existing",
+                value: JSON.stringify(meta),
+              },
+              {
+                type: "button",
+                text: { type: "plain_text", text: `No, create "${eventName}"` },
+                action_id: "travel_dedupe_create_new",
+                value: JSON.stringify(meta),
+              },
+            ],
+          },
+        ],
+      });
+      return;
+    }
+  }
+
+  await registerTrip({ submitterSlackId, eventName, employeeId, destination, departure, returnDate });
+}
+
+async function registerTrip({ submitterSlackId, eventName, employeeId, destination, departure, returnDate }) {
   const employeeName = await getSlackUserName(SLACK_TOKEN, employeeId);
   const allRows      = await getTravelRows(SHEETS_ID);
   const channel      = existingChannel(allRows, eventName)
@@ -690,6 +758,37 @@ async function handleTravelRegistration({ submitterSlackId, eventName, employeeI
   }
 
   console.log(`Travel registered: ${employeeName} → ${eventName} (${departure} – ${returnDate}), channel: #${channel.channelName}`);
+}
+
+// Handles a plain-text DM asking a natural-language question about a trip,
+// e.g. "who's going to Programmatic NY?" or "how much did DMEXCO cost?".
+// Restricted to @truvid.com accounts, same bar as receipt submission —
+// anyone else's DM is silently ignored.
+async function handleTravelQuestionDm(ev) {
+  const isAuthorized = ev.user === YULIA_SLACK_ID || (await verifyTruvid(ev.user));
+  if (!isAuthorized) return;
+
+  const allRows = await getTravelRows(SHEETS_ID);
+  const distinctNames = [...new Set(allRows.map((r) => r.event).filter(Boolean))];
+  if (!distinctNames.length) return;
+
+  const { intent, eventName } = await classifyTravelQuestion(ev.text.trim(), distinctNames).catch(() => ({ intent: null, eventName: null }));
+
+  if (!intent || !eventName) {
+    await slackApi("chat.postMessage", { channel: ev.channel, text: unknownTravelQuestionMessage() }).catch(() => {});
+    return;
+  }
+
+  if (intent === "roster") {
+    const rows = rowsForEvent(allRows, eventName);
+    await slackApi("chat.postMessage", { channel: ev.channel, text: tripRosterMessage({ eventName, rows }) }).catch(() => {});
+    return;
+  }
+
+  // intent === "cost"
+  const { rows, pendingEmployees } = await buildTripSummary(SHEETS_ID, eventName, allRows);
+  const text = tripCostSummaryMessage({ eventName, rows, pendingEmployees });
+  await slackApi("chat.postMessage", { channel: ev.channel, text }).catch(() => {});
 }
 
 async function handleTravelChannelUpload(ev) {
