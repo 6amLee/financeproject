@@ -126,22 +126,33 @@ export async function findMatchingTripName(newEventName, existingEventNames) {
 }
 
 // Classifies a free-text DM question about travel (e.g. "who's going to
-// Programmatic NY?" or "how much did DMEXCO cost so far?") against the list
-// of known trip event names. Returns { intent, eventName } where intent is
-// "roster", "cost", or null if the question isn't a recognisable travel
+// Programmatic NY?", "how much did DMEXCO cost so far?", or "when is Aviad's
+// flight for Programmatic NY?") against the list of known trip event names
+// and (optionally) the known employee names on that trip. Returns
+// { intent, eventName, employeeName } where intent is "roster", "cost",
+// "employee_detail", or null if the question isn't a recognisable travel
 // question or doesn't match any known trip. Claude only classifies — actual
-// numbers/rosters always come from the sheet, never from the model.
-export async function classifyTravelQuestion(question, existingEventNames) {
-  if (!existingEventNames.length) return { intent: null, eventName: null };
+// numbers/rosters/dates always come from the sheet, never from the model.
+export async function classifyTravelQuestion(question, existingEventNames, employeeNames = []) {
+  if (!existingEventNames.length) return { intent: null, eventName: null, employeeName: null };
+
+  const employeeList = employeeNames.length
+    ? `\n\nKnown employee names (across all trips):\n${employeeNames.map((n) => `- ${n}`).join("\n")}`
+    : "";
 
   const prompt =
     `A Slack bot handles questions about company trips. Known trip names:\n` +
     existingEventNames.map((n) => `- ${n}`).join("\n") +
+    employeeList +
     `\n\nUser's question: "${question}"\n\n` +
     `Output ONLY a raw JSON object starting with a left brace and ending with a right brace, no code fences. ` +
-    `Keys: intent (one of "roster" — asking who is/was attending a trip; "cost" — asking how much a trip cost or spent; ` +
-    `or null if this isn't a travel question or you can't tell), ` +
-    `eventName (the exact matching name from the known trip list above, or null if no trip is clearly referenced or none match).`;
+    `Keys:\n` +
+    `intent — one of "roster" (asking who is/was attending a trip), "cost" (asking how much a trip cost or spent), ` +
+    `"employee_detail" (asking about a specific person's trip details, e.g. their flight/departure/return dates or destination), ` +
+    `or null if this isn't a travel question or you can't tell.\n` +
+    `eventName — the exact matching name from the known trip list above, or null if no trip is clearly referenced or none match.\n` +
+    `employeeName — only relevant when intent is "employee_detail": the exact matching name from the known employee list above ` +
+    `that the question is asking about, or null if not applicable or no clear match.`;
 
   const response = await getClient().messages.create({
     model: "claude-haiku-4-5",
@@ -150,15 +161,16 @@ export async function classifyTravelQuestion(question, existingEventNames) {
   });
 
   const textBlock = (response.content || []).find((b) => b.type === "text");
-  if (!textBlock) return { intent: null, eventName: null };
+  if (!textBlock) return { intent: null, eventName: null, employeeName: null };
 
   try {
     const parsed = parseJsonLoose(textBlock.text);
-    const intent = ["roster", "cost"].includes(parsed.intent) ? parsed.intent : null;
+    const intent = ["roster", "cost", "employee_detail"].includes(parsed.intent) ? parsed.intent : null;
     const eventName = existingEventNames.includes(parsed.eventName) ? parsed.eventName : null;
-    return { intent, eventName };
+    const employeeName = employeeNames.includes(parsed.employeeName) ? parsed.employeeName : null;
+    return { intent, eventName, employeeName };
   } catch (e) {
     console.warn(`classifyTravelQuestion: malformed Claude response — ${e.message}`);
-    return { intent: null, eventName: null };
+    return { intent: null, eventName: null, employeeName: null };
   }
 }

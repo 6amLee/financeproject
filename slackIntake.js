@@ -35,7 +35,7 @@ import { resolveSlackId } from "./src/rambo/slackIds.js";
 import { appendLedgerEntry } from "./src/rambo/ledger.js";
 import { getTravelRows, appendTravelRow, updateTravelRow, existingChannel, rowsForEvent } from "./src/travels/travelsSheet.js";
 import { createTripChannel, addEmployeeToChannel } from "./src/travels/travelsSlack.js";
-import { buildTripSummary, formatTotals } from "./src/travels/travelsSummary.js";
+import { buildTripSummary } from "./src/travels/travelsSummary.js";
 import {
   employeeRegistrationMessage,
   yuliaRosterUpdateMessage,
@@ -44,6 +44,7 @@ import {
   tripCostSummaryMessage,
   tripRosterMessage,
   unknownTravelQuestionMessage,
+  employeeDetailMessage,
   formatTravelDate,
   addDays,
 } from "./src/travels/travelsMessages.js";
@@ -761,9 +762,9 @@ async function registerTrip({ submitterSlackId, eventName, employeeId, destinati
 }
 
 // Handles a plain-text DM asking a natural-language question about a trip,
-// e.g. "who's going to Programmatic NY?" or "how much did DMEXCO cost?".
-// Restricted to @truvid.com accounts, same bar as receipt submission —
-// anyone else's DM is silently ignored.
+// e.g. "who's going to Programmatic NY?", "how much did DMEXCO cost?", or
+// "when is Aviad's flight for DMEXCO?". Restricted to @truvid.com accounts,
+// same bar as receipt submission — anyone else's DM is silently ignored.
 async function handleTravelQuestionDm(ev) {
   const isAuthorized = ev.user === YULIA_SLACK_ID || (await verifyTruvid(ev.user));
   if (!isAuthorized) return;
@@ -772,12 +773,14 @@ async function handleTravelQuestionDm(ev) {
   const distinctNames = [...new Set(allRows.map((r) => r.event).filter(Boolean))];
   if (!distinctNames.length) return;
 
+  const employeeNames = [...new Set(allRows.map((r) => r.employee).filter(Boolean))];
+
   // Strip Slack's "<@U0ABC123>" mention tokens — just noise for the classifier.
   const question = ev.text.replace(/<@[A-Z0-9]+>/g, "").trim();
 
-  const { intent, eventName } = await classifyTravelQuestion(question, distinctNames).catch((e) => {
+  const { intent, eventName, employeeName } = await classifyTravelQuestion(question, distinctNames, employeeNames).catch((e) => {
     console.warn("classifyTravelQuestion call failed:", e.message);
-    return { intent: null, eventName: null };
+    return { intent: null, eventName: null, employeeName: null };
   });
 
   if (!intent || !eventName) {
@@ -788,6 +791,13 @@ async function handleTravelQuestionDm(ev) {
   if (intent === "roster") {
     const rows = rowsForEvent(allRows, eventName);
     await slackApi("chat.postMessage", { channel: ev.channel, text: tripRosterMessage({ eventName, rows }) }).catch(() => {});
+    return;
+  }
+
+  if (intent === "employee_detail") {
+    const tripRows = rowsForEvent(allRows, eventName);
+    const row = employeeName ? tripRows.find((r) => r.employee === employeeName) : null;
+    await slackApi("chat.postMessage", { channel: ev.channel, text: employeeDetailMessage({ eventName, row }) }).catch(() => {});
     return;
   }
 
@@ -860,13 +870,7 @@ async function handleEshelAmountSubmit({ meta, amount }) {
 async function handleTravelSummaryCommand(requestingUserId, eventName) {
   const allRows = await getTravelRows(SHEETS_ID);
   const { rows, pendingEmployees } = await buildTripSummary(SHEETS_ID, eventName, allRows);
-  const summaryRows = rows.map((r) => ({
-    ...r,
-    totalIls: r.totalIls,
-    totalsLabel: formatTotals(r.totals),
-    receipts: r.receipts,
-  }));
-  const text = tripCostSummaryMessage({ eventName, rows: summaryRows, pendingEmployees });
+  const text = tripCostSummaryMessage({ eventName, rows, pendingEmployees });
   await slackApi("chat.postMessage", { channel: requestingUserId, text });
 }
 

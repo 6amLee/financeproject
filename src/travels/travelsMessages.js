@@ -2,6 +2,8 @@
 // All DM and notification text for the travels flow. Pure functions — no I/O,
 // no Slack calls. Callers supply the data; these return the text to send.
 
+import { formatTotals } from "./travelsSummary.js";
+
 // ── REGISTRATION ─────────────────────────────────────────────────────────────
 
 export function employeeRegistrationMessage({ employeeName, eventName, destination, departureDate, returnDate, channelName }) {
@@ -119,10 +121,16 @@ export function tripCostSummaryMessage({ eventName, rows, pendingEmployees }) {
   const lines = rows.map((r) => {
     const receiptList = r.receipts.map((rx) => rx.provider).join(", ");
     const countLabel = `${r.receipts.length} receipt${r.receipts.length === 1 ? "" : "s"}`;
-    return `• *${r.employee}* — ₪${r.totalIls.toLocaleString()} (${countLabel}: ${receiptList})`;
+    return `• *${r.employee}* — ${formatTotals(r.totals)} (${countLabel}: ${receiptList})`;
   });
 
-  const grandTotal = rows.reduce((sum, r) => sum + r.totalIls, 0);
+  // Grand total, per currency (handles mixed-currency trips correctly).
+  const grandTotals = {};
+  for (const r of rows) {
+    for (const [cur, amt] of Object.entries(r.totals)) {
+      grandTotals[cur] = (grandTotals[cur] ?? 0) + amt;
+    }
+  }
   const pending = pendingEmployees.length > 0
     ? `\n\n⏳ *Receipts not yet confirmed:* ${pendingEmployees.join(", ")}`
     : "";
@@ -132,7 +140,7 @@ export function tripCostSummaryMessage({ eventName, rows, pendingEmployees }) {
     `─────────────────────────\n` +
     lines.join("\n") + "\n" +
     `─────────────────────────\n` +
-    `*Total: ₪${grandTotal.toLocaleString()}*` +
+    `*Total: ${formatTotals(grandTotals)}*` +
     pending
   );
 }
@@ -150,7 +158,19 @@ export function tripRosterMessage({ eventName, rows }) {
 }
 
 export function unknownTravelQuestionMessage() {
-  return "I couldn't tell which trip you're asking about, or what you'd like to know. Try something like \"who's going to DMEXCO?\" or \"how much did DMEXCO cost?\"";
+  return "I couldn't tell which trip you're asking about, or what you'd like to know. Try something like \"who's going to DMEXCO?\", \"how much did DMEXCO cost?\", or \"when is Aviad's flight for DMEXCO?\"";
+}
+
+export function employeeDetailMessage({ eventName, row }) {
+  if (!row) {
+    return `I couldn't find that person registered for *${eventName}*.`;
+  }
+  return (
+    `*${row.employee} — ${eventName}*\n` +
+    `*Destination:* ${row.destination}\n` +
+    `*Departure:* ${formatTravelDate(row.departureDate)}\n` +
+    `*Return:* ${formatTravelDate(row.returnDate)}`
+  );
 }
 
 // ── SHARED HELPERS ────────────────────────────────────────────────────────────
