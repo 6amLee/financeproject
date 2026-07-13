@@ -1,6 +1,6 @@
 # Truvid Receipt System — Master Build Doc
 
-**Project:** Automated receipt intake \+ credit-card reconciliation ("The Rambo") **Owner:** Lee (Head of People) · **Finance:** Yulia · **Escalation:** Roee · **API/billing:** Ron **Last updated:** end of the Make-intake build session (intake working; dedup \+ Claude body mid-fix)
+**Project:** Automated receipt intake \+ credit-card reconciliation ("The Olive") **Owner:** Lee (Head of People) · **Finance:** Yulia · **Escalation:** Roee · **API/billing:** Ron **Last updated:** end of the Make-intake build session (intake working; dedup \+ Claude body mid-fix)
 
 ---
 
@@ -10,7 +10,7 @@ The Make.com scenario described below was the first build. After the base64 fix 
 
 - **Repo:** `github.com/6amLee/financeproject` (separate from Monica's repo — different data sensitivity, different owners, own Google service account, own Anthropic key).
 - **Status:** built, tested (vitest), pushed. Blocked only on Ron issuing a new Anthropic API key (the working key was exposed in a chat session and needs rotating) before Railway's first real deploy can run.
-- **The Rambo** (statement matching + Slack chase, §10 below) is being designed and built directly in code from the start — see `Rambo_Design_Doc.md` in this repo for the full spec, grounded in the real statement export and Vendor Ownership sheet.
+- **The Olive** (statement matching + Slack chase, §10 below) is being designed and built directly in code from the start — see `Olive_Design_Doc.md` in this repo for the full spec, grounded in the real statement export and Vendor Ownership sheet.
 - Sections 1–9 below remain as a historical record of what Make.com did and why each piece existed — useful context, but **the Make scenario itself should be turned off** once the new service is verified working, to avoid double-processing.
 
 ---
@@ -20,11 +20,11 @@ The Make.com scenario described below was the first build. After the base64 fix 
 Two connected systems:
 
 - **Intake** — a receipt/invoice arrives by email, gets read automatically by Claude, and lands as one structured row in a Google Sheet (the master DB). Files are archived in Google Drive.  
-- **The Rambo** — a scheduled bot (not built yet) that will check the company credit-card statement against the master DB every 24h and chase missing receipts over Slack.
+- **The Olive** — a scheduled bot (not built yet) that will check the company credit-card statement against the master DB every 24h and chase missing receipts over Slack.
 
 Refundly is **not** integrated — it only defined the column set. The Google Sheet is the single source of truth.
 
-One-liner: *Email → Claude reads it → row in the Master DB. Later, The Rambo checks the statement against the DB daily and chases the gaps.*
+One-liner: *Email → Claude reads it → row in the Master DB. Later, The Olive checks the statement against the DB daily and chases the gaps.*
 
 ---
 
@@ -40,9 +40,9 @@ One-liner: *Email → Claude reads it → row in the Master DB. Later, The Rambo
 | Master DB (Google Sheet) | Data | One row per receipt, source of truth | ✅ live |
 | Vendor Ownership sheet | Data | vendor → owner map (founders filling) | ✅ sent to founders |
 | Statement normalizer | Script | Flattens Yulia's Hebrew statement | ✅ built/prototyped |
-| The Rambo | Bot (scheduled) | Matching \+ Slack chase | ⬜ not built |
+| The Olive | Bot (scheduled) | Matching \+ Slack chase | ⬜ not built |
 
-**Skills vs bots vs brains:** The Rambo is a **bot** (runs on a 24h trigger); Claude is a **brain** (logic, invoked by the bot); the Sheet is **data**. Make is the automation host that ties them together.
+**Skills vs bots vs brains:** The Olive is a **bot** (runs on a 24h trigger); Claude is a **brain** (logic, invoked by the bot); the Sheet is **data**. Make is the automation host that ties them together.
 
 ---
 
@@ -64,7 +64,7 @@ One-liner: *Email → Claude reads it → row in the Master DB. Later, The Rambo
 
 - Duplicate *prevention* in Make (only detection exists).  
 - Branch B — body-only e-receipts (LinkedIn/SaaS emails with no attachment).  
-- The Rambo (matching \+ Slack chase).  
+- The Olive (matching \+ Slack chase).  
 - ENR fields (owner / recurring / monthly-yearly at intake) — deliberately deferred.
 
 ---
@@ -75,7 +75,7 @@ One-liner: *Email → Claude reads it → row in the Master DB. Later, The Rambo
 
 Columns (form order \+ ops): `Captured at · Source · Expense type* · Date* · Currency* · Amount* · Paid by* · Credit card* (if Organization) · Cardholder · Provider · Receipt No.* · Comments · Invoice link* · Status · Matched Amex txn` \+ hidden **Dup Check** column.
 
-- `Paid by` ∈ {Employee, Organization}. **Only Organization rows get reconciled** by The Rambo. Employee \= reimbursement list for Yulia.  
+- `Paid by` ∈ {Employee, Organization}. **Only Organization rows get reconciled** by The Olive. Employee \= reimbursement list for Yulia.  
 - `Status` ∈ {Pending, Reconciled, Missing receipt, Reimburse (employee)}. New rows start **Pending**.  
 - Expense type dropdown (14): Advertising, Business meetings, Company event, Computer maintenance, Gas, Gifts for Employees, Gifts for partners, Office equipment, Other, Parking, Professional services, Refreshments / Snacks, Taxi/Train/Bus, Team lunch/ Dinner.
 
@@ -87,7 +87,7 @@ Columns (form order \+ ops): `Captured at · Source · Expense type* · Date* ·
 
 64 real vendors, recurring/SaaS sorted to top. Founders fill the **Owner(s)** column. Multi-owner supported (LinkedIn \= 3 products at 3 amounts on 2 cards). Escalation lists live in the same workbook.
 
-### Escalation lists (for The Rambo's chase)
+### Escalation lists (for The Olive's chase)
 
 - **Stage 2 — Potential Owners (9):** Roee, Ron, Elad, Lee, Marco, Diana, Richard, Aviv, Nadav  
 - **Stage 3 — Managers (12):** Roee, Ron, Elad, Lee, Marco, Diana, Aviad, Aviv, Olivia, Rafael, Bruni, Gal
@@ -210,7 +210,7 @@ One outer `{{ }}`, capital B, `21.data` bare inside. No colored chip.
 
 ---
 
-## 10\. The Rambo (matching \+ chase) — spec summary (not built)
+## 10\. The Olive (matching \+ chase) — spec summary (not built)
 
 **Stage 0 — statement normalizer (✅ prototyped).** Yulia's export is a stable 4-section Hebrew report (domestic / overseas-ILS / overseas-USD / overseas-EUR \+ summary). A script flattens it to: card · txn\_date · billing\_date · merchant · amount · currency · amount\_ils · reference · type · recurring · refund. Format confirmed stable.
 
@@ -235,7 +235,7 @@ One outer `{{ }}`, capital B, `21.data` bare inside. No colored chip.
 5. **Duplicate prevention** in Make (Search Rows \+ count filter) — revisit fresh.  
 6. **Branch B** — body-only e-receipts (no attachment): Claude reads email body; Invoice link \= Gmail message link; later body→PDF→Drive.  
 7. **Founders return** the Vendor Ownership sheet → build the ownership map.  
-8. **Build The Rambo** — normalizer → matching → Slack chase (per §10).  
+8. **Build The Olive** — normalizer → matching → Slack chase (per §10).  
 9. **ENR** (owner/recurring/monthly at intake) — later.
 
 ---

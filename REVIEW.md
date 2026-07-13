@@ -1,4 +1,4 @@
-# Codebase Review — Rambo Finance Bot
+# Codebase Review — Olive Finance Bot
 
 > Two-pass review. Pass 1 (cleanup) is complete before Pass 2 (security) begins.
 > **No changes have been made to any source file.** All findings listed only.
@@ -8,7 +8,7 @@
 ## Pass 1 — Code Cleanup & Deduplication
 
 ### P1-1 · Duplicate Slack API POST wrappers
-**Files:** `src/rambo/chase.js:228-245` · `src/slackIntake.js:18-30` (the helper module)
+**Files:** `src/olive/chase.js:228-245` · `src/slackIntake.js:18-30` (the helper module)
 
 `sendSlackMessage` in chase.js and `slackPost` in src/slackIntake.js both make an identical native-fetch POST to `https://slack.com/api/<method>`. The only structural difference is that `sendSlackMessage` hard-codes `chat.postMessage` while `slackPost` is generic. chase.js never imports from src/slackIntake.js, so neither knows the other exists.
 
@@ -18,7 +18,7 @@
 ---
 
 ### P1-2 · Triplicated Google Sheets singleton getter
-**Files:** `src/sheets.js:13-16` · `src/rambo/ledger.js:23-26` · `src/rambo/chaseState.js:25-28`
+**Files:** `src/sheets.js:13-16` · `src/olive/ledger.js:23-26` · `src/olive/chaseState.js:25-28`
 
 All three files contain byte-for-byte identical:
 ```js
@@ -36,7 +36,7 @@ The ledger.js comment explicitly notes this is intentional ("three lines, fails 
 ---
 
 ### P1-3 · Triplicated promise-queue pattern (three different styles)
-**Files:** `src/sheets.js:41-90` · `src/rambo/ledger.js:82-100` · `src/rambo/chaseState.js:80-91`
+**Files:** `src/sheets.js:41-90` · `src/olive/ledger.js:82-100` · `src/olive/chaseState.js:80-91`
 
 All three serialise Sheet writes through a queue. chaseState.js extracts the cleanest form via an `enqueue(fn)` helper; the other two repeat the `task.then(() => {}, e => console.error(...))` pattern inline at every call site.
 
@@ -46,17 +46,17 @@ All three serialise Sheet writes through a queue. chaseState.js extracts the cle
 ---
 
 ### P1-4 · Identical `parseBool` / `parseConfirmed` functions
-**Files:** `src/rambo/ledger.js:31-33` · `src/rambo/chaseState.js:33-35`
+**Files:** `src/olive/ledger.js:31-33` · `src/olive/chaseState.js:33-35`
 
 Both are `/^true$/i.test(String(v ?? "").trim())` with different names.
 
-**Suggested fix:** Export `parseBool` from one module; the other imports it. Or move to a shared `src/rambo/utils.js`.
+**Suggested fix:** Export `parseBool` from one module; the other imports it. Or move to a shared `src/olive/utils.js`.
 **Risk flag:** None.
 
 ---
 
 ### P1-5 · `normalizeMerchant` duplicated as a private `norm` in resolver.js
-**Files:** `src/rambo/matcher.js:49-51` (exported) · `src/rambo/resolver.js:48` (private const)
+**Files:** `src/olive/matcher.js:49-51` (exported) · `src/olive/resolver.js:48` (private const)
 
 ```js
 // matcher.js — exported
@@ -68,7 +68,7 @@ export function normalizeMerchant(s) {
 const norm = (v) => String(v ?? "").toLowerCase().trim().replace(/\s+/g, " ");
 ```
 
-They are identical. resolver.js already imports from matcher.js (transitively via rambo.js), so there's no impedance mismatch.
+They are identical. resolver.js already imports from matcher.js (transitively via olive.js), so there's no impedance mismatch.
 
 **Suggested fix:** In resolver.js, `import { normalizeMerchant as norm } from "./matcher.js"` and remove the inline definition.
 **Risk flag:** None.
@@ -96,14 +96,14 @@ Adding a new supported format (e.g. `image/heic`) requires updating three files.
 
 ---
 
-### P1-7 · `MASTER_DB_RANGE` in rambo.js stops at column O — misses column P
-**File:** `rambo.js:64`
+### P1-7 · `MASTER_DB_RANGE` in olive.js stops at column O — misses column P
+**File:** `olive.js:64`
 
 ```js
 const MASTER_DB_RANGE = "'Master DB'!A2:O";
 ```
 
-Column P (`document_type`) was added after this line was written. Rambo reads 15 columns and the 16th is always `undefined` for every Master DB row it processes. matcher.js `MASTER_COL` doesn't reference column P, so no crash — but it means Rambo can never see `document_type` for future matching logic.
+Column P (`document_type`) was added after this line was written. Olive reads 15 columns and the 16th is always `undefined` for every Master DB row it processes. matcher.js `MASTER_COL` doesn't reference column P, so no crash — but it means Olive can never see `document_type` for future matching logic.
 
 **Suggested fix:** Change to `A2:P`. Also update the comment on the same line which says "A–O".
 **Risk flag:** Safe — expanding the read range never breaks anything.
@@ -111,7 +111,7 @@ Column P (`document_type`) was added after this line was written. Rambo reads 15
 ---
 
 ### P1-8 · `MASTER_COL.matchedAmexTxn` is a stale name
-**File:** `src/rambo/matcher.js:33`
+**File:** `src/olive/matcher.js:33`
 
 ```js
 matchedAmexTxn: 14,  // column was renamed "Matched CC txn"
@@ -468,21 +468,21 @@ The cursor (a Slack message timestamp string) is read from the "Slack Intake Sta
 
 ---
 
-### [LOW] S2-L3 · Rambo's `MASTER_DB_RANGE` stops at column O — `document_type` invisible to matcher
-**File:** `rambo.js:64` *(also listed as P1-7 for cleanup)*
+### [LOW] S2-L3 · Olive's `MASTER_DB_RANGE` stops at column O — `document_type` invisible to matcher
+**File:** `olive.js:64` *(also listed as P1-7 for cleanup)*
 
 ```js
 const MASTER_DB_RANGE = "'Master DB'!A2:O";
 ```
 
-This is both a cleanup issue and a mild data integrity concern: Rambo performs matching decisions based on an incomplete view of each receipt row. Currently `document_type` is not used by the matcher, so there is no impact — but if a future matching rule needs "is this a receipt or an invoice?" the column will silently be `undefined`.
+This is both a cleanup issue and a mild data integrity concern: Olive performs matching decisions based on an incomplete view of each receipt row. Currently `document_type` is not used by the matcher, so there is no impact — but if a future matching rule needs "is this a receipt or an invoice?" the column will silently be `undefined`.
 
 **Remediation:** Extend to `A2:P` and update MASTER_COL if needed.
 
 ---
 
 ### [LOW] S2-L4 · `appendLedgerEntry` is imported but never called in the running codebase
-**Files:** `src/rambo/ledger.js` — exports `appendLedgerEntry` and `buildLedgerRow`; `rambo.js` — does not import them
+**Files:** `src/olive/ledger.js` — exports `appendLedgerEntry` and `buildLedgerRow`; `olive.js` — does not import them
 
 The ledger write path is defined but not yet wired (the design doc describes it as a future follow-up once the confirmation flow is built). Dead exports are not a security risk but are a maintenance concern — they receive no testing in the current live path.
 

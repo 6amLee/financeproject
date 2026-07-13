@@ -1,4 +1,4 @@
-// ── RAMBO STAGE 1: STATEMENT ↔ MASTER DB MATCHER ────────────────────────────
+// ── OLIVE STAGE 1: STATEMENT ↔ MASTER DB MATCHER ────────────────────────────
 // Pure functions, no I/O: statement TransactionRows (from normalizer.js),
 // Master DB rows (arrays in buildReceiptRow column order, as read back from
 // the Sheet), and the parsed ownership map (from ownership.js) in — match

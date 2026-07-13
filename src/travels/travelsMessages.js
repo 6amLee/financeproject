@@ -12,7 +12,7 @@ export function employeeRegistrationMessage({ employeeName, eventName, destinati
     `*Departure:* ${departureDate}\n` +
     `*Return:* ${returnDate}\n\n` +
     `Drop all your trip receipts (taxi, meals, hotel, insurance — everything) in <#${channelName}>. ` +
-    `Rambo will process them automatically.`
+    `Olive will process them automatically.`
   );
 }
 
@@ -59,7 +59,7 @@ export function departureDayMessage({ employeeName, eventName, channelName }) {
   return (
     `Have a great trip, ${employeeName}! 🛫 Safe travels to *${eventName}*.\n\n` +
     `Remember: drop all receipts (meals, taxi, anything work-related) in <#${channelName}> as you go. ` +
-    `Rambo will handle the rest.`
+    `Olive will handle the rest.`
   );
 }
 

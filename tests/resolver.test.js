@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { resolveOwner, COLD_START_OWNERS } from "../src/rambo/resolver.js";
+import { resolveOwner, COLD_START_OWNERS } from "../src/olive/resolver.js";
 
 // Minimal cluster in matcher.js's clusterTransactions output shape.
 function makeCluster(overrides = {}) {

@@ -28,7 +28,7 @@ export async function getExistingReceiptNumbers(sheetId) {
 }
 
 // Generic tab read (design doc: extend sheets.js with generic helpers
-// reusable by the Rambo modules). Used by rambo.js to read Master DB rows
+// reusable by the Olive modules). Used by olive.js to read Master DB rows
 // and the Vendor Ownership tab. Read-only — doesn't touch the write queue.
 export async function readTabRows(sheetId, rangeA1) {
   const res = await getSheets().spreadsheets.values.get({
@@ -70,7 +70,7 @@ export function appendErrorRow(sheetId, { service, messageId, sender, subject, a
   return task;
 }
 
-// "Unanswered Questions" tab — every travel DM question Rambo couldn't
+// "Unanswered Questions" tab — every travel DM question Olive couldn't
 // confidently answer (no intent, or no matching trip/employee). Reviewed
 // periodically to decide which should become a new supported intent.
 // Columns: Logged at · Asker · Question · Guessed intent · Guessed event ·

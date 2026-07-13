@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseOwnershipSheet, parseOwnersCell } from "../src/rambo/ownership.js";
+import { parseOwnershipSheet, parseOwnersCell } from "../src/olive/ownership.js";
 
 // Fixture built from real rows in the actual Vendor Ownership Google Sheet
 // read during the design session. Column order:

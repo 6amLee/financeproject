@@ -1,4 +1,4 @@
-// ── RAMBO STAGE 3: CHASE CADENCE ────────────────────────────────────────────
+// ── OLIVE STAGE 3: CHASE CADENCE ────────────────────────────────────────────
 // The escalation state machine for unmatched-charge clusters, plus the Slack
 // message builder/sender. The decision logic (nextChaseAction) and the message
 // builder are PURE — plain data in, plain data out, `now` is always passed in
@@ -28,7 +28,7 @@
 // `nextChaseAction` returns ONE action per call. Crossing a stage boundary
 // returns { action: "advance" } WITHOUT nudging in the same result — the
 // caller applies the stage change to its state and simply calls again, which
-// then yields the new stage's +0h nudge (rambo.js loops exactly like this).
+// then yields the new stage's +0h nudge (olive.js loops exactly like this).
 // Keeping advance and nudge as separate steps means a process that was down
 // for days advances through the missed stages without firing a catch-up nudge
 // for every threshold it slept through — only the current stage's due nudge
@@ -82,7 +82,7 @@ function toMs(v) {
 
 // ── nextChaseAction ──────────────────────────────────────────────────────────
 // clusterState: { clusterId, vendor, amount, stage (1-4), stageEnteredAt,
-//                 lastNudgeAt, resolved } — the "Rambo Chase State" tab shape.
+//                 lastNudgeAt, resolved } — the "Olive Chase State" tab shape.
 // now: Date (or parseable string).
 //
 // Returns exactly one of:
@@ -173,13 +173,13 @@ export function buildChaseMessage({ vendor, amount, currency, cluster, owners, s
   switch (stage) {
     case 1:
       return (
-        `Hi! Rambo from Finance here. I found ${charge} on the company card${detailText}, ` +
+        `Hi! Olive from Finance here. I found ${charge} on the company card${detailText}, ` +
         `but no matching receipt in the system. If this one is yours, could you forward ` +
         `the receipt to finance@truvid.com? Thanks!`
       );
     case 2:
       return (
-        `Hi, Rambo from Finance again. There's still no receipt for ${charge}${detailText}. ` +
+        `Hi, Olive from Finance again. There's still no receipt for ${charge}${detailText}. ` +
         `You're on the potential-owners list for this card — if this charge is yours, or you ` +
         `know whose it is, please forward the receipt to finance@truvid.com or reply here.`
       );
@@ -192,7 +192,7 @@ export function buildChaseMessage({ vendor, amount, currency, cluster, owners, s
       );
     default:
       return (
-        `Final escalation from Rambo: the receipt for ${charge}${detailText} is seriously ` +
+        `Final escalation from Olive: the receipt for ${charge}${detailText} is seriously ` +
         `overdue and still unclaimed after the full reminder cycle (likely owner, potential ` +
         `owners, managers). No further automatic reminders will be sent — flagging for your ` +
         `decision on next steps.`

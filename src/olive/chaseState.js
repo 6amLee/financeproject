@@ -1,5 +1,5 @@
-// ── RAMBO CHASE STATE (Sheet tab I/O) ───────────────────────────────────────
-// Read/write the "Rambo Chase State" tab: one row per unmatched-charge
+// ── OLIVE CHASE STATE (Sheet tab I/O) ───────────────────────────────────────
+// Read/write the "Olive Chase State" tab: one row per unmatched-charge
 // cluster being chased, persisting the Stage 3 state machine between poll
 // ticks (and across restarts — lastNudgeAt in the sheet is what stops a
 // restarted process from re-firing a nudge that already went out). Column
@@ -8,14 +8,14 @@
 //   last_nudge_at (ISO, blank until first nudge) · resolved (TRUE/FALSE)
 //
 // New sibling module rather than additions to ledger.js: same granularity
-// (one module per Rambo tab), same patterns as ledger.js/sheets.js — pure
+// (one module per Olive tab), same patterns as ledger.js/sheets.js — pure
 // row builder separate from I/O, lazily-built singleton client over the
 // shared getGoogleAuth(), promise-queue-serialised writes.
 
 import { google } from "googleapis";
 import { getGoogleAuth } from "../googleAuth.js";
 
-const TAB_NAME = "Rambo Chase State";
+const TAB_NAME = "Olive Chase State";
 // Row 1 is the header; data starts at A2.
 const DATA_RANGE = `'${TAB_NAME}'!A2:G`;
 

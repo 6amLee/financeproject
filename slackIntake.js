@@ -30,10 +30,10 @@ import {
   formatCharge,
   matchReceiptToPendingCharge,
 } from "./src/statementIntake.js";
-import { appendStatementChaseThread, getStatementChaseThreads, updateStatementChaseThread } from "./src/rambo/statementChase.js";
-import { appendStatementRun } from "./src/rambo/statementRuns.js";
-import { resolveSlackId } from "./src/rambo/slackIds.js";
-import { appendLedgerEntry } from "./src/rambo/ledger.js";
+import { appendStatementChaseThread, getStatementChaseThreads, updateStatementChaseThread } from "./src/olive/statementChase.js";
+import { appendStatementRun } from "./src/olive/statementRuns.js";
+import { resolveSlackId } from "./src/olive/slackIds.js";
+import { appendLedgerEntry } from "./src/olive/ledger.js";
 import { getTravelRows, appendTravelRow, updateTravelRow, existingChannel, rowsForEvent } from "./src/travels/travelsSheet.js";
 import { createTripChannel, addEmployeeToChannel } from "./src/travels/travelsSlack.js";
 import { buildTripSummary } from "./src/travels/travelsSummary.js";
@@ -79,7 +79,7 @@ const YULIA_SLACK_ID      = process.env.YULIA_SLACK_ID || "";
 const FINANCE_ADMIN_SLACK_ID = process.env.FINANCE_ADMIN_SLACK_ID || "";
 const STATEMENT_DRY_RUN   = process.env.STATEMENT_DRY_RUN === "true";
 
-// Who's allowed to ask Rambo natural-language travel questions in a DM —
+// Who's allowed to ask Olive natural-language travel questions in a DM —
 // intentionally narrow (financial cost data), not "anyone @truvid.com".
 const TRAVEL_QA_ALLOWED_IDS = new Set([YULIA_SLACK_ID, FINANCE_ADMIN_SLACK_ID].filter(Boolean));
 
@@ -369,7 +369,7 @@ const server = http.createServer((req, res) => {
       return;
     }
 
-    // ── Slash commands (/rambotravels) ───────────────────────────────────────
+    // ── Slash commands (/olivetravels) ───────────────────────────────────────
     if (isCommands) {
       const params = new URLSearchParams(rawBody);
       const command = params.get("command");
@@ -379,7 +379,7 @@ const server = http.createServer((req, res) => {
 
       res.writeHead(200, { "Content-Type": "application/json" });
 
-      if (command === "/rambotravels") {
+      if (command === "/olivetravels") {
         const [sub, ...rest] = text.split(/\s+/);
 
         if (!sub || sub === "register") {
@@ -402,7 +402,7 @@ const server = http.createServer((req, res) => {
         } else {
           res.end(JSON.stringify({
             response_type: "ephemeral",
-            text: "Usage: `/rambotravels` · `/rambotravels summary DMEXCO` · `/rambotravels cancel DMEXCO`",
+            text: "Usage: `/olivetravels` · `/olivetravels summary DMEXCO` · `/olivetravels cancel DMEXCO`",
           }));
         }
         return;

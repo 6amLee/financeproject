@@ -1,4 +1,4 @@
-// ── STATEMENT RAMBO — NUDGE POLL CYCLE ───────────────────────────────────────
+// ── STATEMENT OLIVE — NUDGE POLL CYCLE ───────────────────────────────────────
 // Separate entry point from slackIntake.js. Statement comparison and Stage 1
 // DMs are fired immediately when Yulia uploads a file (via slackIntake.js).
 // This process owns the follow-up nudge cycle: every hour it checks open
@@ -10,11 +10,11 @@ import { slackPost } from "./src/slackIntake.js";
 import {
   getStatementChaseThreads,
   updateStatementChaseThread,
-} from "./src/rambo/statementChase.js";
+} from "./src/olive/statementChase.js";
 import {
   getStatementRuns,
   updateStatementRun,
-} from "./src/rambo/statementRuns.js";
+} from "./src/olive/statementRuns.js";
 import { readTabRows } from "./src/sheets.js";
 import {
   findReceiptForCharge,
@@ -39,7 +39,7 @@ const SLACK_TOKEN        = process.env.SLACK_BOT_TOKEN;
 const STATEMENTS_CHANNEL = process.env.SLACK_STATEMENTS_CHANNEL || "";
 const COMPANY_CHANNEL    = process.env.SLACK_COMPANY_CHANNEL    || "";
 const YULIA_SLACK_ID     = process.env.YULIA_SLACK_ID           || "U088YU5HD4H";
-const POLL_INTERVAL_MIN  = Number(process.env.STATEMENT_RAMBO_POLL_MINUTES) || 60;
+const POLL_INTERVAL_MIN  = Number(process.env.STATEMENT_OLIVE_POLL_MINUTES) || 60;
 const NUDGE_INTERVAL_MS  = process.env.STATEMENT_NUDGE_INTERVAL_MINUTES
   ? Number(process.env.STATEMENT_NUDGE_INTERVAL_MINUTES) * 60 * 1000
   : 24 * 60 * 60 * 1000; // default 24 hours between stages
@@ -257,7 +257,7 @@ async function handleStage3(runId, allThreads) {
 // ── Poll cycle ────────────────────────────────────────────────────────────────
 
 async function pollCycle() {
-  console.log(`Statement Rambo cycle started at ${new Date().toISOString()}`);
+  console.log(`Statement Olive cycle started at ${new Date().toISOString()}`);
   try {
     const threads = await getStatementChaseThreads(SHEETS_ID);
     const openThreads = threads.filter((t) => !t.resolved && t.nudgeCount < 3);
@@ -314,16 +314,16 @@ async function pollCycle() {
       await handleStage3(runId, threads);
     }
   } catch (e) {
-    console.error("Statement Rambo cycle failed:", e.message);
+    console.error("Statement Olive cycle failed:", e.message);
   }
 }
 
 const runOnce = process.argv.includes("--once");
 if (runOnce) {
   await pollCycle();
-  console.log("Single statement Rambo cycle complete (--once).");
+  console.log("Single statement Olive cycle complete (--once).");
 } else {
-  console.log(`Statement Rambo running — polling every ${POLL_INTERVAL_MIN} minute(s).`);
+  console.log(`Statement Olive running — polling every ${POLL_INTERVAL_MIN} minute(s).`);
   await pollCycle();
   setInterval(pollCycle, POLL_INTERVAL_MIN * 60 * 1000);
 }

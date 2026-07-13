@@ -35,7 +35,7 @@ function loadCredentials() {
   }
 }
 
-// Used by Sheets and all Rambo modules.
+// Used by Sheets and all Olive modules.
 export function getGoogleAuth() {
   if (_auth) return _auth;
   _auth = new google.auth.GoogleAuth({ credentials: loadCredentials(), scopes: SHEETS_SCOPES });

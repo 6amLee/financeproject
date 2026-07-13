@@ -1,4 +1,4 @@
-// ── THE RAMBO — STATEMENT RECONCILIATION + SLACK CHASE ──────────────────────
+// ── THE OLIVE — STATEMENT RECONCILIATION + SLACK CHASE ──────────────────────
 // Separate entry point from index.js, per the design doc's explicit decision:
 // intake polls Gmail every few minutes, the chase cadence is measured in
 // hours, so they are different processes with different intervals. Run with
@@ -8,28 +8,28 @@
 //
 // Restart safety: there is no in-process last-run bookkeeping to carry across
 // restarts (same as index.js) — the double-fire protection for nudges lives
-// in the PERSISTED chase state (lastNudgeAt in the "Rambo Chase State" tab),
+// in the PERSISTED chase state (lastNudgeAt in the "Olive Chase State" tab),
 // which nextChaseAction consults, so a restarted process never re-sends a
 // nudge whose threshold already fired.
 
-import { normalizeStatement } from "./src/rambo/normalizer.js";
-import { parseOwnershipSheet } from "./src/rambo/ownership.js";
-import { matchReceipts, clusterTransactions } from "./src/rambo/matcher.js";
-import { resolveOwner } from "./src/rambo/resolver.js";
-import { getLedgerEntries } from "./src/rambo/ledger.js";
+import { normalizeStatement } from "./src/olive/normalizer.js";
+import { parseOwnershipSheet } from "./src/olive/ownership.js";
+import { matchReceipts, clusterTransactions } from "./src/olive/matcher.js";
+import { resolveOwner } from "./src/olive/resolver.js";
+import { getLedgerEntries } from "./src/olive/ledger.js";
 import {
   getChaseStates,
   appendChaseState,
   updateChaseState,
-} from "./src/rambo/chaseState.js";
+} from "./src/olive/chaseState.js";
 import {
   nextChaseAction,
   buildChaseMessage,
   getChaseRecipients,
   sendChaseNudges,
-} from "./src/rambo/chase.js";
+} from "./src/olive/chase.js";
 import { readTabRows } from "./src/sheets.js";
-import { resolveSlackId } from "./src/rambo/slackIds.js";
+import { resolveSlackId } from "./src/olive/slackIds.js";
 
 // Load .env for local runs if this Node version supports it (20.12+).
 // On Railway env vars are injected directly, so this is best-effort.
@@ -58,8 +58,8 @@ const SHEETS_ID = process.env.GOOGLE_SHEETS_ID;
 const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN || "";
 // Separate from index.js's POLL_INTERVAL_MINUTES — different cadence for a
 // different loop. Chase thresholds are 24h apart, so hourly is plenty.
-const RAMBO_POLL_INTERVAL_MINUTES =
-  Number(process.env.RAMBO_POLL_INTERVAL_MINUTES) || 60;
+const OLIVE_POLL_INTERVAL_MINUTES =
+  Number(process.env.OLIVE_POLL_INTERVAL_MINUTES) || 60;
 
 // Master DB columns A–Q per sheets.js buildReceiptRow / matcher.js MASTER_COL.
 const MASTER_DB_RANGE = "'Master DB'!A2:Q";
@@ -67,7 +67,7 @@ const MASTER_DB_RANGE = "'Master DB'!A2:Q";
 const OWNERSHIP_RANGE = "'Vendor Ownership'!A2:J";
 
 // ── STATEMENT INGESTION — INTEGRATION POINT, DELIBERATELY NOT WIRED ──────────
-// How the statement file reaches Rambo is explicitly undecided (design doc
+// How the statement file reaches Olive is explicitly undecided (design doc
 // "Open decisions" #1 — Drive-folder watch vs email-forward vs something
 // else). Whichever method gets picked must return the statement as an
 // already-parsed 2D array (rows × columns) for normalizeStatement(). Until
@@ -78,7 +78,7 @@ async function fetchStatementGrid() {
   return null;
 }
 
-// resolveSlackId is imported from src/rambo/slackIds.js (single source of truth).
+// resolveSlackId is imported from src/olive/slackIds.js (single source of truth).
 
 // Persist a chase state row: append when new, in-place update otherwise.
 // Under --dry-run nothing is written — persisted state must stay untouched so
@@ -187,7 +187,7 @@ async function processCluster({ cluster, missingCount, existingState, ownershipM
 }
 
 async function pollCycle() {
-  console.log(`Rambo cycle started at ${new Date().toISOString()}${dryRun ? " [dry-run]" : ""}`);
+  console.log(`Olive cycle started at ${new Date().toISOString()}${dryRun ? " [dry-run]" : ""}`);
   try {
     const grid = await fetchStatementGrid();
     if (!grid) {
@@ -247,15 +247,15 @@ async function pollCycle() {
       }
     }
   } catch (e) {
-    console.error("Rambo cycle failed:", e.message);
+    console.error("Olive cycle failed:", e.message);
   }
 }
 
 if (runOnce) {
   await pollCycle();
-  console.log("Single Rambo cycle complete (--once).");
+  console.log("Single Olive cycle complete (--once).");
 } else {
-  console.log(`Rambo running — polling every ${RAMBO_POLL_INTERVAL_MINUTES} minute(s).`);
+  console.log(`Olive running — polling every ${OLIVE_POLL_INTERVAL_MINUTES} minute(s).`);
   await pollCycle();
-  setInterval(pollCycle, RAMBO_POLL_INTERVAL_MINUTES * 60 * 1000);
+  setInterval(pollCycle, OLIVE_POLL_INTERVAL_MINUTES * 60 * 1000);
 }

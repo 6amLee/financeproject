@@ -1,15 +1,15 @@
-# Rambo — Ron Briefing
+# Olive — Ron Briefing
 **Meeting:** 2026-07-08 | **Prepared by:** Lee
 
 ---
 
-## What Rambo Is
+## What Olive Is
 
-Rambo is Truvid's internal finance automation bot. It does two things:
+Olive is Truvid's internal finance automation bot. It does two things:
 
 1. **Receipt intake** — anyone (employees, Yulia) can upload a receipt to Slack or email it to finance@truvid.com and it lands as a structured row in the Master DB Google Sheet automatically. Claude reads the document and extracts the data.
 
-2. **Statement reconciliation + chase** — Yulia uploads the monthly bank statement to a Slack channel. Rambo cross-references it against the Master DB and automatically DMs anyone with an unmatched charge, following up until the receipt is submitted or escalation is triggered.
+2. **Statement reconciliation + chase** — Yulia uploads the monthly bank statement to a Slack channel. Olive cross-references it against the Master DB and automatically DMs anyone with an unmatched charge, following up until the receipt is submitted or escalation is triggered.
 
 ---
 
@@ -30,8 +30,8 @@ Rambo is Truvid's internal finance automation bot. It does two things:
 **4 processes run in parallel on Railway:**
 - `index.js` — Gmail intake (polls every few minutes)
 - `slackIntake.js` — Slack receipt intake + statement upload handler + HTTP server for Slack interactions
-- `statementRambo.js` — follow-up nudge cycle (polls hourly)
-- `rambo.js` — cluster-based reconciliation (hourly, for the long-running chase state machine)
+- `statementOlive.js` — follow-up nudge cycle (polls hourly)
+- `olive.js` — cluster-based reconciliation (hourly, for the long-running chase state machine)
 
 ---
 
@@ -50,9 +50,9 @@ Rambo is Truvid's internal finance automation bot. It does two things:
 ## How Statement Reconciliation Works
 
 1. Yulia uploads the Bank Hapoalim Excel to the `#statements` Slack channel
-2. Rambo parses it, cross-references against every row in Master DB
+2. Olive parses it, cross-references against every row in Master DB
 3. For each unmatched charge: DM sent to the likely owner with the charge details
-4. Owner drops their receipt right in the DM thread → Rambo reads it, matches it, writes to Master DB as **Matched**
+4. Owner drops their receipt right in the DM thread → Olive reads it, matches it, writes to Master DB as **Matched**
 
 **Nudge cadence (per unmatched charge):**
 | Time | Action |

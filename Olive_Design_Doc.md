@@ -1,31 +1,31 @@
-# The Rambo — Design Doc (Stage 0–3: Normalizer, Matching, Ownership Resolution, Slack Chase)
+# The Olive — Design Doc (Stage 0–3: Normalizer, Matching, Ownership Resolution, Slack Chase)
 
 
 ## Context
 
-The Node.js receipt-intake service (emails → Claude → Master DB rows) is built, pushed to `github.com/6amLee/financeproject`, and blocked only on Ron issuing a rotated Anthropic key. The Master Doc's §10 describes "The Rambo" — the second half of the system: reconcile the credit-card statement against the Master DB daily and chase missing receipts over Slack. It was never built; only Stage 0 (statement normalizer) was "prototyped." This doc designs all four stages end-to-end, grounded in two real files read this session:
+The Node.js receipt-intake service (emails → Claude → Master DB rows) is built, pushed to `github.com/6amLee/financeproject`, and blocked only on Ron issuing a rotated Anthropic key. The Master Doc's §10 describes "The Olive" — the second half of the system: reconcile the credit-card statement against the Master DB daily and chase missing receipts over Slack. It was never built; only Stage 0 (statement normalizer) was "prototyped." This doc designs all four stages end-to-end, grounded in two real files read this session:
 
 - **Real statement export** (a Bank Hapoalim-style Hebrew credit card statement): confirmed 5 sections — previous-charges summary, domestic-by-card summary, overseas-by-card summary, domestic transaction detail, overseas transaction detail (further split into an ILS-converted block and a by-original-currency block for USD/other). Confirmed real quirks: reference numbers (אסמכתא) are often trivial/reused (`0`, `1001`) so can't be a match key; recurring flag is literal (`הוראת קבע` = standing order); refunds appear as negative amounts in the same detail rows (not separate); overseas descriptors embed a city prefix before `~` (e.g. `SAN FRANCISCO~ANTHROPIC: CLAUDE TEA`) that must be stripped before fuzzy matching; which column holds "original currency amount" shifts depending on which of the 3 detail sections a row came from.
 - **Real Vendor Ownership sheet**: `Owner(s)` column is free text, not clean CSV (`"Olivia, Aviv, Lee + other people"`, inconsistent spacing/trailing junk). Some rows intentionally have no owner (one-off travel/restaurant charges — sheet's own instructions say these rarely need one). `Card(s) seen` and `Typical amount` can hold multiple values (`"4154, 9037"`, `"varies (570-3,204)"`). `Statement descriptor` holds multiple aliases separated by `|`.
 
-Decisions made this session: best-effort parse the messy Owner(s) column with a manual-review flag for anything that doesn't yield clean names (rather than requiring a sheet cleanup pass first); Rambo runs as a **separate entry point** in the same `financeproject` repo (its own poll loop, not merged into the existing email-intake `index.js`, since intake polls every few minutes but chase cadence is measured in hours); **how the statement file reaches Rambo is explicitly undecided** — do not build a specific ingestion path (neither a Drive-folder watch nor an email-based one) until that's settled. The normalizer is designed as a pure function that takes already-extracted file content in and returns flat rows out, so it's ready to plug into whichever ingestion method gets picked later.
+Decisions made this session: best-effort parse the messy Owner(s) column with a manual-review flag for anything that doesn't yield clean names (rather than requiring a sheet cleanup pass first); Olive runs as a **separate entry point** in the same `financeproject` repo (its own poll loop, not merged into the existing email-intake `index.js`, since intake polls every few minutes but chase cadence is measured in hours); **how the statement file reaches Olive is explicitly undecided** — do not build a specific ingestion path (neither a Drive-folder watch nor an email-based one) until that's settled. The normalizer is designed as a pure function that takes already-extracted file content in and returns flat rows out, so it's ready to plug into whichever ingestion method gets picked later.
 
 ## Architecture
 
-New entry point `rambo.js` alongside the existing `index.js`, sharing the existing `src/googleAuth.js` singleton and following the same style as `src/sheets.js` (pure builder functions separate from I/O, promise-queue for concurrent Sheets writes). New modules under `src/rambo/`:
+New entry point `olive.js` alongside the existing `index.js`, sharing the existing `src/googleAuth.js` singleton and following the same style as `src/sheets.js` (pure builder functions separate from I/O, promise-queue for concurrent Sheets writes). New modules under `src/olive/`:
 
 ```
-rambo.js                          — poll loop entry point (separate from index.js)
-  └─ src/rambo/normalizer.js      — Stage 0: raw statement text/rows → flat transaction rows
-  └─ src/rambo/ownership.js       — loads + best-effort-parses Vendor Ownership sheet
-  └─ src/rambo/matcher.js         — Stage 1: match statement rows ↔ Master DB receipt rows
-  └─ src/rambo/resolver.js        — Stage 2: rank who to nudge per unmatched charge
-  └─ src/rambo/ledger.js          — learning ledger: read/write resolution history to a Sheet tab
-  └─ src/rambo/chase.js           — Stage 3: cadence state machine + Slack message sending
+olive.js                          — poll loop entry point (separate from index.js)
+  └─ src/olive/normalizer.js      — Stage 0: raw statement text/rows → flat transaction rows
+  └─ src/olive/ownership.js       — loads + best-effort-parses Vendor Ownership sheet
+  └─ src/olive/matcher.js         — Stage 1: match statement rows ↔ Master DB receipt rows
+  └─ src/olive/resolver.js        — Stage 2: rank who to nudge per unmatched charge
+  └─ src/olive/ledger.js          — learning ledger: read/write resolution history to a Sheet tab
+  └─ src/olive/chase.js           — Stage 3: cadence state machine + Slack message sending
   └─ src/sheets.js (extended)      — add ledger + chase-state read/write helpers
 ```
 
-### Stage 0 — Normalizer (`src/rambo/normalizer.js`)
+### Stage 0 — Normalizer (`src/olive/normalizer.js`)
 
 Pure function `normalizeStatement(rawSections)` → `TransactionRow[]`, where each row is:
 ```
@@ -41,7 +41,7 @@ Logic, keyed off section headers actually observed in the real file:
 
 Input format decision deferred (see Open decisions): write `normalizeStatement` to accept an already-parsed 2D array of the sheet (rows × columns) rather than assuming a specific fetch path — keeps ingestion pluggable.
 
-### Stage 1 — Matching (`src/rambo/matcher.js`)
+### Stage 1 — Matching (`src/olive/matcher.js`)
 
 For each Master-DB row where `Paid by = Organization` and `Status = Pending`, find candidate statement rows:
 - Card last-4 matches `Credit card` column (note: Master DB's `Credit card`/`Cardholder` columns are currently always blank per the existing `buildReceiptRow` — Stage 1 needs these populated; either backfill from the receipt's payment metadata if Claude can extract it, or match on amount+date+merchant alone without the card filter, treating card-match as a *scoring boost* rather than a hard requirement. Flag this as a decision needed before Stage 1 is fully wired — the doc assumed card would be present but current intake doesn't populate it).
@@ -53,7 +53,7 @@ For each Master-DB row where `Paid by = Organization` and `Status = Pending`, fi
 
 **Multi-owner clustering**: group statement rows by `(card, merchant-normalized, amount-or-amount-bucket, billing period)`. Compare cluster size to count of matched Master DB rows in the same cluster. If cluster size > matched count, the delta is "missing" — chase for that many. If all cluster amounts are identical, the chase targets the *owner set* (ambiguous which specific person); if amounts differ per owner (e.g. LinkedIn Recruiter vs Sales Navigator), match specific amount deltas to the specific owner from the Vendor Ownership sheet's per-product notes.
 
-### Stage 2 — Ownership resolution (`src/rambo/resolver.js` + `src/rambo/ledger.js`)
+### Stage 2 — Ownership resolution (`src/olive/resolver.js` + `src/olive/ledger.js`)
 
 `resolveOwner(vendor, card, cluster)` ranks candidates in this order, stopping at the first non-empty result:
 1. Vendor→owner map (from `ownership.js`'s parsed Vendor Ownership sheet).
@@ -61,13 +61,13 @@ For each Master-DB row where `Paid by = Organization` and `Status = Pending`, fi
 3. Learned card history, recency-weighted — prior resolutions for this card, weighted toward more recent entries (handles access churn: someone stops using a card, a new person starts).
 4. Cold start — the 9 Potential Owners list from the doc §4 (Roee, Ron, Elad, Lee, Marco, Diana, Richard, Aviv, Nadav).
 
-Every resolution (whether a receipt eventually gets matched to a person, or a chase gets a confirmed response) writes a row to a new Sheet tab, e.g. `Rambo Ledger`: `vendor, card, resolved_owner, resolved_at, resolution_source (vendor_map|vendor_history|card_history|cold_start), confirmed (bool)`. This is the self-maintaining piece — no manual card-access list needed.
+Every resolution (whether a receipt eventually gets matched to a person, or a chase gets a confirmed response) writes a row to a new Sheet tab, e.g. `Olive Ledger`: `vendor, card, resolved_owner, resolved_at, resolution_source (vendor_map|vendor_history|card_history|cold_start), confirmed (bool)`. This is the self-maintaining piece — no manual card-access list needed.
 
-**Ownership sheet parsing** (`src/rambo/ownership.js`): split `Owner(s)` on commas, trim each fragment, drop fragments that don't look like a name (e.g. `"+ other people"`, empty strings) via a simple heuristic (fragment contains only letters/spaces, length ≥2, not a known filler phrase). Rows where this yields zero clean names get collected into a `needsReview` list returned alongside the parsed map — surfaced in Rambo's own log/report rather than silently dropped or guessed.
+**Ownership sheet parsing** (`src/olive/ownership.js`): split `Owner(s)` on commas, trim each fragment, drop fragments that don't look like a name (e.g. `"+ other people"`, empty strings) via a simple heuristic (fragment contains only letters/spaces, length ≥2, not a known filler phrase). Rows where this yields zero clean names get collected into a `needsReview` list returned alongside the parsed map — surfaced in Olive's own log/report rather than silently dropped or guessed.
 
-### Stage 3 — Chase cadence (`src/rambo/chase.js`)
+### Stage 3 — Chase cadence (`src/olive/chase.js`)
 
-State machine per unmatched-charge-cluster, persisted in a Sheet tab (e.g. `Rambo Chase State`): `cluster_id, vendor, amount, stage (1-4), stage_entered_at, last_nudge_at, resolved (bool)`.
+State machine per unmatched-charge-cluster, persisted in a Sheet tab (e.g. `Olive Chase State`): `cluster_id, vendor, amount, stage (1-4), stage_entered_at, last_nudge_at, resolved (bool)`.
 
 Cadence (hours, tunable via env var or a config object — doc gives concrete defaults):
 - Stage 1 — likely owner (from resolver): nudge at T+0 and T+24h if still unresolved.
@@ -75,19 +75,19 @@ Cadence (hours, tunable via env var or a config object — doc gives concrete de
 - Stage 3 — Managers list (Roee, Ron, Elad, Lee, Marco, Diana, Aviad, Aviv, Olivia, Rafael, Bruni, Gal): T+96h, T+120h.
 - Stage 4 — Roee+Yulia: T+144h, then stop (no further auto-escalation).
 
-Each tick of `rambo.js`'s poll loop: re-run matching (a previously-missing receipt may have since landed via the intake service) — if now matched, mark `resolved = true` and stop chasing (doc: "found receipt re-enters intake" — this is just re-running Stage 1 each cycle, no special re-entry code needed). Otherwise, check if current time has crossed the next nudge threshold for the cluster's stage; if so, send the Slack message and advance/repeat within the stage per the cadence table; if the current stage's last nudge has passed, advance to the next stage.
+Each tick of `olive.js`'s poll loop: re-run matching (a previously-missing receipt may have since landed via the intake service) — if now matched, mark `resolved = true` and stop chasing (doc: "found receipt re-enters intake" — this is just re-running Stage 1 each cycle, no special re-entry code needed). Otherwise, check if current time has crossed the next nudge threshold for the cluster's stage; if so, send the Slack message and advance/repeat within the stage per the cadence table; if the current stage's last nudge has passed, advance to the next stage.
 
 Slack sending: reuse the existing Monica pattern (native `fetch` to Slack's Web API, no SDK) — new small helper, not a dependency on Monica's actual Slack client code (separate repo, separate bot token — Finance needs its own Slack app/bot token, same reasoning as the separate Google service account decision made earlier).
 
 ## Key files to create
 
-- `rambo.js` — poll loop entry point, `--once` flag for local testing (mirrors `index.js`'s existing pattern).
-- `src/rambo/normalizer.js` — pure function, Stage 0 logic above.
-- `src/rambo/ownership.js` — load + best-effort parse Vendor Ownership sheet, return `{ map, needsReview }`.
-- `src/rambo/matcher.js` — Stage 1 matching + clustering logic.
-- `src/rambo/resolver.js` — Stage 2 ranking logic.
-- `src/rambo/ledger.js` — read/write the Rambo Ledger tab.
-- `src/rambo/chase.js` — Stage 3 state machine + Slack nudge sending.
+- `olive.js` — poll loop entry point, `--once` flag for local testing (mirrors `index.js`'s existing pattern).
+- `src/olive/normalizer.js` — pure function, Stage 0 logic above.
+- `src/olive/ownership.js` — load + best-effort parse Vendor Ownership sheet, return `{ map, needsReview }`.
+- `src/olive/matcher.js` — Stage 1 matching + clustering logic.
+- `src/olive/resolver.js` — Stage 2 ranking logic.
+- `src/olive/ledger.js` — read/write the Olive Ledger tab.
+- `src/olive/chase.js` — Stage 3 state machine + Slack nudge sending.
 - `src/sheets.js` — extend with generic tab read/write helpers reusable by ledger.js and chase.js (currently hardcoded to `Master DB` only).
 - `tests/normalizer.test.js` — unit tests against fixture rows drawn from the real statement sections read this session (refund detection, recurring flag, city-prefix stripping, currency-column selection per section).
 - `tests/matcher.test.js` — unit tests for the matching rules (tolerance band, date window, ambiguous-candidate handling, multi-owner clustering).
@@ -95,12 +95,12 @@ Slack sending: reuse the existing Monica pattern (native `fetch` to Slack's Web 
 
 ## Open decisions (not resolved yet)
 
-1. **Statement ingestion path** — explicitly deferred. Normalizer is built input-agnostic; a follow-up decision is needed on Drive-folder-watch vs email-forward vs something else before Rambo can run unattended.
+1. **Statement ingestion path** — explicitly deferred. Normalizer is built input-agnostic; a follow-up decision is needed on Drive-folder-watch vs email-forward vs something else before Olive can run unattended.
 2. **Card/Cardholder columns are blank in Master DB** — current intake service never populates them (not derivable from a receipt alone). Stage 1's card-match rule needs either a backfill mechanism or to become a soft signal rather than a hard filter. Decision needed before wiring matching for real.
 3. **Slack app/bot token for Finance** — doesn't exist yet; needs creating in Slack admin, separate from Monica's bot, before Stage 3 can send anything.
 
 ## Verification
 
 - `npm test` — new normalizer/matcher/ownership unit tests, run against fixtures drawn from the real files read this session (not synthetic data), so passing tests are directly evidence against Truvid's actual statement/ownership format.
-- Manual: once ingestion path is decided, run `node rambo.js --once` against a real statement + the current (small, 3-row) Master DB, inspect console output for match/review/missing classification before wiring any real Slack sends.
+- Manual: once ingestion path is decided, run `node olive.js --once` against a real statement + the current (small, 3-row) Master DB, inspect console output for match/review/missing classification before wiring any real Slack sends.
 - Stage 3 dry-run: add a `--dry-run` flag that logs intended Slack messages instead of sending, so cadence logic can be verified over several simulated ticks before real nudges go out to real people.
