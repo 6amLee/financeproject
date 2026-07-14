@@ -25,7 +25,15 @@ export async function slackPost(token, method, body) {
     body: JSON.stringify(body),
   });
   const data = await res.json();
-  if (!data.ok) throw new Error(`Slack ${method} error: ${data.error}`);
+  if (!data.ok) {
+    // response_metadata.messages carries the actual validation detail (e.g.
+    // "invalid blocks[3]: ...") that data.error alone (just "invalid_arguments")
+    // doesn't — surface it so failures are diagnosable from logs alone.
+    const detail = data.response_metadata?.messages?.length
+      ? ` — ${data.response_metadata.messages.join("; ")}`
+      : "";
+    throw new Error(`Slack ${method} error: ${data.error}${detail}`);
+  }
   return data;
 }
 
