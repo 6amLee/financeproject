@@ -19,6 +19,7 @@ import { readTabRows } from "./src/sheets.js";
 import {
   findReceiptForCharge,
   formatCharge,
+  buildNotMineBlocks,
 } from "./src/statementIntake.js";
 import { downloadDriveFile } from "./src/drive.js";
 import { colorStatementExcel } from "./src/statementColoring.js";
@@ -52,49 +53,29 @@ async function slackApi(method, body) {
 
 // ── Nudge message builders ────────────────────────────────────────────────────
 
-// Groups a flat pendingCharges array by clusterKey and formats as:
-//   • *Merchant* · card ...XXXX
-//     - 2,196 ILS
-//     - 1,996 ILS
-function formatChargeList(charges) {
-  const groups = new Map();
-  for (const c of charges) {
-    const key = c.clusterKey ?? `${c.merchant}|${c.card}`;
-    if (!groups.has(key)) groups.set(key, { merchant: c.merchant, card: c.card, amounts: [] });
-    groups.get(key).amounts.push({ amount: c.amount, currency: c.currency });
-  }
-  return [...groups.values()]
-    .map(({ merchant, card, amounts }) => {
-      const header = [merchant ? `*${merchant}*` : "*Unknown*", card ? `card ...${card}` : null]
-        .filter(Boolean).join(" · ");
-      const amtLines = amounts
-        .map(({ amount, currency }) => `  - ${amount}${currency ? ` ${currency}` : ""}`)
-        .join("\n");
-      return `• ${header}\n${amtLines}`;
-    })
-    .join("\n\n");
-}
-
-function buildStage2Message(userName, charges) {
+function buildStage2Lead(userName, charges) {
   const vendorCount = new Set(charges.map((c) => c.clusterKey ?? c.merchant)).size;
   return (
     `Hi ${userName} — following up on the charges I flagged yesterday. ` +
     `*${vendorCount} vendor(s)* still have no receipt on file. ` +
     `Please check your inbox, ask your team, and submit anything missing here ASAP — ` +
-    `one receipt at a time, right in this chat.\n\n${formatChargeList(charges)}\n\n` +
-    `_If you submitted a receipt recently and it's not here yet, it may still be processing — I'll re-check automatically._`
+    `one receipt at a time, right in this chat. If something below isn't yours, use the buttons.`
   );
 }
 
-function buildStage3Message(userName, charges) {
+const STAGE2_TRAILER =
+  `_If you submitted a receipt recently and it's not here yet, it may still be processing — I'll re-check automatically._`;
+
+function buildStage3Lead(userName, charges) {
   const vendorCount = new Set(charges.map((c) => c.clusterKey ?? c.merchant)).size;
   return (
     `Hi ${userName} — this is the final personal reminder. ` +
-    `*${vendorCount} vendor(s)* remain unaccounted for after two rounds of reminders.\n\n` +
-    `${formatChargeList(charges)}\n\n` +
-    `A company-wide alert is going out now. Please submit before end of day.`
+    `*${vendorCount} vendor(s)* remain unaccounted for after two rounds of reminders. ` +
+    `If something below isn't yours, use the buttons.`
   );
 }
+
+const STAGE3_TRAILER = `A company-wide alert is going out now. Please submit before end of day.`;
 
 function buildCompanyBlast(allOutstanding) {
   const lines = allOutstanding
@@ -160,11 +141,16 @@ async function handleStage3(runId, allThreads) {
     if (!thread.pendingCharges?.length) continue;
     const stillPending = allOutstanding.find((o) => o.userName === thread.userName)?.charges ?? [];
     if (!stillPending.length) continue;
+    const leadText = buildStage3Lead(thread.userName, stillPending);
     try {
       await slackApi("chat.postMessage", {
         channel: thread.dmChannelId,
         thread_ts: thread.threadTs,
-        text: buildStage3Message(thread.userName, stillPending),
+        text: leadText,
+        blocks: buildNotMineBlocks({
+          leadText, trailerText: STAGE3_TRAILER, charges: stillPending,
+          userId: thread.userId, userName: thread.userName, runId: thread.runId,
+        }),
       });
     } catch (e) {
       console.warn(`Stage 3 DM to ${thread.userName} failed: ${e.message}`);
@@ -288,10 +274,15 @@ async function pollCycle() {
         const nextCount = thread.nudgeCount + 1; // 2 or 3
 
         if (nextCount === 2) {
+          const leadText = buildStage2Lead(thread.userName, stillPending);
           await slackApi("chat.postMessage", {
             channel: thread.dmChannelId,
             thread_ts: thread.threadTs,
-            text: buildStage2Message(thread.userName, stillPending),
+            text: leadText,
+            blocks: buildNotMineBlocks({
+              leadText, trailerText: STAGE2_TRAILER, charges: stillPending,
+              userId: thread.userId, userName: thread.userName, runId: thread.runId,
+            }),
           });
           console.log(`Stage 2 nudge → ${thread.userName} (${stillPending.length} charges).`);
         }

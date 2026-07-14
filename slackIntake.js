@@ -29,11 +29,13 @@ import {
   buildPendingCharge,
   formatCharge,
   matchReceiptToPendingCharge,
+  buildNotMineBlocks,
 } from "./src/statementIntake.js";
 import { appendStatementChaseThread, getStatementChaseThreads, updateStatementChaseThread } from "./src/olive/statementChase.js";
 import { appendStatementRun } from "./src/olive/statementRuns.js";
 import { resolveSlackId } from "./src/olive/slackIds.js";
 import { appendLedgerEntry } from "./src/olive/ledger.js";
+import { appendNotMineEntry } from "./src/olive/notMine.js";
 import { getTravelRows, appendTravelRow, updateTravelRow, existingChannel, rowsForEvent } from "./src/travels/travelsSheet.js";
 import { createTripChannel, addEmployeeToChannel } from "./src/travels/travelsSlack.js";
 import { buildTripSummary } from "./src/travels/travelsSummary.js";
@@ -459,6 +461,23 @@ const server = http.createServer((req, res) => {
           res.writeHead(200); res.end();
           registerTrip({ submitterSlackId, eventName, employeeId, destination, departure, returnDate })
             .catch((e) => console.error("Travel registration error:", e.message));
+          return;
+        }
+
+        // ── Statement chase: "Not mine" opt-out buttons ───────────────────────
+        if (action?.action_id === "statement_not_mine_charge" || action?.action_id === "statement_not_mine_all") {
+          const meta  = JSON.parse(action.value || "{}");
+          const scope = action.action_id === "statement_not_mine_charge" ? "charge" : "all";
+          res.writeHead(200); res.end();
+          handleStatementNotMine({
+            scope,
+            userId: meta.userId,
+            userName: meta.userName,
+            runId: meta.runId,
+            clusterKey: meta.clusterKey || "",
+            channel: payload.channel?.id,
+            messageTs: payload.message?.ts,
+          }).catch((e) => console.error("Statement not-mine error:", e.message));
           return;
         }
 
@@ -947,6 +966,56 @@ async function handleTravelCancelCommand(requestingUserId, eventName) {
   console.log(`Trip cancelled: ${eventName}`);
 }
 
+// ── STATEMENT CHASE: "NOT MINE" OPT-OUT ──────────────────────────────────────
+// scope "charge": stop offering this one clusterKey to this person, now and
+// in future statement runs (recorded in the Not Mine tab; enforced up front
+// in runStatementComparison's byOwner grouping).
+// scope "all": stop selecting this person as a likely owner for anything —
+// their open chase thread (if any) is marked resolved so nudges stop too.
+async function handleStatementNotMine({ scope, userId, userName, runId, clusterKey, channel, messageTs }) {
+  if (!userId) return;
+
+  await appendNotMineEntry(SHEETS_ID, { userId, userName, scope, clusterKey, declaredAt: new Date().toISOString() });
+
+  const allThreads = await getStatementChaseThreads(SHEETS_ID);
+  const thread = allThreads.find((t) => t.runId === runId && t.userId === userId && !t.resolved);
+
+  if (thread) {
+    if (scope === "all") {
+      await updateStatementChaseThread(SHEETS_ID, thread.rowNumber, { ...thread, pendingCharges: [], resolved: true });
+    } else {
+      const remaining = (thread.pendingCharges || []).filter((c) => c.clusterKey !== clusterKey);
+      await updateStatementChaseThread(SHEETS_ID, thread.rowNumber, {
+        ...thread,
+        pendingCharges: remaining,
+        resolved: remaining.length === 0,
+      });
+    }
+  }
+
+  // Re-render the message: drop the dismissed vendor's section+button (or,
+  // for "all", replace the whole thing with a single confirmation line).
+  if (channel && messageTs) {
+    const confirmText = scope === "all"
+      ? `Got it, ${userName} — I won't flag any statement charges to you going forward. If that changes, just let Lee know.`
+      : `Got it, ${userName} — noted as not yours. I won't ask about this one again.`;
+
+    if (scope === "all" || !thread || (thread.pendingCharges || []).length === 0) {
+      await slackApi("chat.update", { channel, ts: messageTs, text: confirmText, blocks: [
+        { type: "section", text: { type: "mrkdwn", text: confirmText } },
+      ] }).catch((e) => console.warn("Statement not-mine chat.update failed:", e.message));
+    } else {
+      const leadText = `Got it — noted. Here's what's still open, ${userName}:`;
+      await slackApi("chat.update", {
+        channel, ts: messageTs, text: leadText,
+        blocks: buildNotMineBlocks({ leadText, charges: thread.pendingCharges, userId, userName, runId }),
+      }).catch((e) => console.warn("Statement not-mine chat.update failed:", e.message));
+    }
+  }
+
+  console.log(`Not mine: ${userName} (${userId}) — scope=${scope}${clusterKey ? ` cluster=${clusterKey}` : ""}`);
+}
+
 // ── STATEMENT UPLOAD HANDLER ─────────────────────────────────────────────────
 
 async function handleStatementUpload(msg) {
@@ -1039,31 +1108,22 @@ async function handleStatementUpload(msg) {
       }
       if (!pendingCharges.length) continue;
 
-      // Group by cluster — one bullet per vendor with individual amounts underneath
-      const clusterLines = items
-        .filter(({ pendingTxns }) => pendingTxns.length > 0)
-        .map(({ cluster, pendingTxns }) => {
-          const merchant = cluster.vendor ?? cluster.merchant ?? "Unknown";
-          const card = cluster.card ? ` · card ...${cluster.card}` : "";
-          const amts = pendingTxns
-            .map((t) => `  - ${t.amount}${t.currency ? ` ${t.currency}` : ""}`)
-            .join("\n");
-          return `• *${merchant}*${card}\n${amts}`;
-        })
-        .join("\n\n");
       const vendorCount = items.filter(({ pendingTxns }) => pendingTxns.length > 0).length;
 
-      const stage1Text =
+      const stage1Lead =
         `Hi ${ownerName} 👋 Yulia has uploaded the latest bank statement and I found ` +
-        `*${vendorCount} vendor(s)* with charges that don't yet have a matching receipt on file:\n\n` +
-        `${clusterLines}\n\n` +
+        `*${vendorCount} vendor(s)* with charges that don't yet have a matching receipt on file. ` +
         `If any of these are yours, drop the receipt(s) right here in this chat — one at a time. ` +
-        `I'll match them automatically.`;
+        `I'll match them automatically. If something below isn't yours, let me know with the buttons.`;
 
       try {
         const conv     = await slackApi("conversations.open", { users: slackId });
         const dmChanId = conv.channel.id;
-        const dmResult = await slackApi("chat.postMessage", { channel: dmChanId, text: stage1Text });
+        const dmResult = await slackApi("chat.postMessage", {
+          channel: dmChanId,
+          text: stage1Lead,
+          blocks: buildNotMineBlocks({ leadText: stage1Lead, charges: pendingCharges, userId: slackId, userName: ownerName, runId }),
+        });
         const threadTs = dmResult.message?.ts || dmResult.ts;
 
         await appendStatementChaseThread(SHEETS_ID, {

@@ -9,6 +9,8 @@ import { matchReceipts, clusterTransactions, merchantSimilarity } from "./olive/
 import { parseOwnershipSheet } from "./olive/ownership.js";
 import { resolveOwner } from "./olive/resolver.js";
 import { getLedgerEntries } from "./olive/ledger.js";
+import { getNotMineEntries, isExcluded } from "./olive/notMine.js";
+import { resolveSlackId } from "./olive/slackIds.js";
 import { readTabRows } from "./sheets.js";
 
 const MASTER_DB_RANGE = "'Master DB'!A2:P";
@@ -45,10 +47,11 @@ export async function runStatementComparison({ base64Data, sheetsId }) {
     throw new Error("Statement parsed to zero rows — check the file is a Bank Hapoalim Excel export");
   }
 
-  const [masterRows, ownershipRows, ledgerEntries] = await Promise.all([
+  const [masterRows, ownershipRows, ledgerEntries, notMineEntries] = await Promise.all([
     readTabRows(sheetsId, MASTER_DB_RANGE),
     readTabRows(sheetsId, OWNERSHIP_RANGE).catch(() => []),  // tab may not exist yet
     getLedgerEntries(sheetsId).catch(() => []),               // tab may not exist yet
+    getNotMineEntries(sheetsId).catch(() => []),              // tab may not exist yet
   ]);
 
   const { map: ownershipMap } = parseOwnershipSheet(ownershipRows);
@@ -75,10 +78,16 @@ export async function runStatementComparison({ base64Data, sheetsId }) {
     resolvedClusters.push({ cluster, resolution, pendingTxns });
   }
 
-  // Group by owner name — one DM per person covering all their unmatched charges
+  // Group by owner name — one DM per person covering all their unmatched
+  // charges. Skip anyone who's opted out (globally, via "None of these are
+  // mine") or this specific charge (via a per-charge "Not mine" dismissal) —
+  // filtered here so an excluded person is never even selected as a
+  // recipient, not just hidden after the fact.
   const byOwner = new Map();
   for (const item of resolvedClusters) {
     for (const owner of item.resolution.owners) {
+      const userId = resolveSlackId(owner);
+      if (userId && isExcluded(notMineEntries, { userId, clusterKey: item.cluster.key })) continue;
       if (!byOwner.has(owner)) byOwner.set(owner, []);
       byOwner.get(owner).push(item);
     }
@@ -120,6 +129,69 @@ export function formatCharge(charge) {
   }
   if (charge.card) parts.push(`card ...${charge.card}`);
   return parts.join(" · ");
+}
+
+// ── Not-mine buttons ──────────────────────────────────────────────────────────
+// Shared by handleStatementUpload (Stage 1) and statementOlive.js (Stage 2/3):
+// one Slack section block per vendor/cluster with its amounts, plus a
+// per-charge "Not mine" button, followed by a single "None of these are
+// mine" button for the whole message. Both button values carry
+// { userId, userName, runId, clusterKey } so the interaction handler can
+// record the opt-out without re-deriving context.
+//
+// leadText/trailerText must NOT re-embed the charge list themselves (no
+// calling formatChargeList internally) — the per-vendor blocks below ARE the
+// charge list; a caller that also inlines it into leadText would duplicate it.
+export function buildNotMineBlocks({ leadText, trailerText, charges, userId, userName, runId }) {
+  const groups = new Map();
+  for (const c of charges) {
+    const key = c.clusterKey ?? `${c.merchant}|${c.card}`;
+    if (!groups.has(key)) groups.set(key, { clusterKey: key, merchant: c.merchant, card: c.card, amounts: [] });
+    groups.get(key).amounts.push({ amount: c.amount, currency: c.currency });
+  }
+
+  const blocks = [
+    { type: "section", text: { type: "mrkdwn", text: leadText } },
+  ];
+
+  for (const { clusterKey, merchant, card, amounts } of groups.values()) {
+    const header = [merchant ? `*${merchant}*` : "*Unknown*", card ? `card ...${card}` : null]
+      .filter(Boolean).join(" · ");
+    const amtLines = amounts
+      .map(({ amount, currency }) => `  - ${amount}${currency ? ` ${currency}` : ""}`)
+      .join("\n");
+    blocks.push({
+      type: "section",
+      text: { type: "mrkdwn", text: `${header}\n${amtLines}` },
+    });
+    blocks.push({
+      type: "actions",
+      elements: [{
+        type: "button",
+        text: { type: "plain_text", text: "Not mine" },
+        action_id: "statement_not_mine_charge",
+        value: JSON.stringify({ userId, userName, runId, clusterKey }),
+      }],
+    });
+  }
+
+  if (trailerText) {
+    blocks.push({ type: "section", text: { type: "mrkdwn", text: trailerText } });
+  }
+
+  blocks.push({ type: "divider" });
+  blocks.push({
+    type: "actions",
+    elements: [{
+      type: "button",
+      text: { type: "plain_text", text: "None of these are mine" },
+      style: "danger",
+      action_id: "statement_not_mine_all",
+      value: JSON.stringify({ userId, userName, runId }),
+    }],
+  });
+
+  return blocks;
 }
 
 // ── Re-check: does a pending charge now have a receipt in the Master DB? ──────
