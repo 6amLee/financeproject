@@ -15,7 +15,7 @@ vi.mock("../src/googleAuth.js", () => ({
   getGoogleAuth: vi.fn(() => ({})),
 }));
 
-const { removePendingCharge } = await import("../src/financeCrew/statementChase.js");
+const { removePendingCharge, updateThreadAtomic } = await import("../src/financeCrew/statementChase.js");
 
 beforeEach(() => {
   mockGet.mockReset();
@@ -123,5 +123,74 @@ describe("removePendingCharge", () => {
     expect(r2.pendingCharges).toEqual([]);
     expect(r2.resolved).toBe(true);
     expect(r1.pendingCharges).toEqual([{ clusterKey: "k2" }]);
+  });
+});
+
+describe("updateThreadAtomic", () => {
+  it("passes the freshly-read row to the updater and merges its return value", async () => {
+    mockGet.mockResolvedValue({
+      data: { values: [row({ runId: "run_1", userName: "Aviad", userId: "U1", nudgeCount: 1, pendingCharges: [{ clusterKey: "k1" }] })] },
+    });
+
+    const updater = vi.fn((current) => ({ nudgeCount: current.nudgeCount + 1, lastNudgeAt: "2026-07-14T00:00:00.000Z" }));
+    const updated = await updateThreadAtomic("sheet-1", { runId: "run_1", userId: "U1" }, updater);
+
+    expect(updater).toHaveBeenCalledWith(expect.objectContaining({ nudgeCount: 1, pendingCharges: [{ clusterKey: "k1" }] }));
+    expect(updated.nudgeCount).toBe(2);
+    expect(updated.lastNudgeAt).toBe("2026-07-14T00:00:00.000Z");
+    expect(updated.pendingCharges).toEqual([{ clusterKey: "k1" }]); // untouched fields preserved
+  });
+
+  it("skips the write and returns null when the updater returns a falsy patch", async () => {
+    mockGet.mockResolvedValue({
+      data: { values: [row({ runId: "run_1", userName: "Aviad", userId: "U1", pendingCharges: [] })] },
+    });
+
+    const result = await updateThreadAtomic("sheet-1", { runId: "run_1", userId: "U1" }, () => null);
+
+    expect(result).toBeNull();
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it("supports an async updater (e.g. one that sends a Slack message before returning the patch)", async () => {
+    mockGet.mockResolvedValue({
+      data: { values: [row({ runId: "run_1", userName: "Aviad", userId: "U1", pendingCharges: [{ clusterKey: "k1" }] })] },
+    });
+
+    const sideEffects = [];
+    const updated = await updateThreadAtomic("sheet-1", { runId: "run_1", userId: "U1" }, async (current) => {
+      sideEffects.push("sent");
+      return { resolved: true, pendingCharges: [] };
+    });
+
+    expect(sideEffects).toEqual(["sent"]);
+    expect(updated.resolved).toBe(true);
+  });
+
+  it("a concurrent removePendingCharge and updateThreadAtomic call on the same thread never race — the second always sees the first's write", async () => {
+    let sheetState = row({
+      runId: "run_1", userName: "Aviad", userId: "U1", nudgeCount: 1,
+      pendingCharges: [{ clusterKey: "k1" }, { clusterKey: "k2" }],
+    });
+    mockGet.mockImplementation(async () => ({ data: { values: [sheetState] } }));
+    mockUpdate.mockImplementation(async ({ requestBody }) => {
+      sheetState = requestBody.values[0];
+      return { data: {} };
+    });
+
+    // Simulates: a "Not mine" click on k1 racing against the nudge cycle's
+    // own atomic update (which reads current.pendingCharges to decide what
+    // to send, exactly like statementFinanceCrew.js's pollCycle now does).
+    const p1 = removePendingCharge("sheet-1", { runId: "run_1", userId: "U1", scope: "charge", clusterKey: "k1" });
+    const p2 = updateThreadAtomic("sheet-1", { runId: "run_1", userId: "U1" }, (current) => ({
+      nudgeCount: current.nudgeCount + 1,
+      pendingCharges: current.pendingCharges, // nudge cycle re-persists whatever it saw
+    }));
+
+    const [, r2] = await Promise.all([p1, p2]);
+
+    // Whichever ran second (the nudge cycle) must see k1 already removed —
+    // never revive it by writing back a stale 2-charge snapshot.
+    expect(r2.pendingCharges).toEqual([{ clusterKey: "k2" }]);
   });
 });

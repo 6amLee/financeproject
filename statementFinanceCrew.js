@@ -9,7 +9,7 @@
 import { slackPost } from "./src/slackIntake.js";
 import {
   getStatementChaseThreads,
-  updateStatementChaseThread,
+  updateThreadAtomic,
 } from "./src/financeCrew/statementChase.js";
 import {
   getStatementRuns,
@@ -45,7 +45,7 @@ const NUDGE_INTERVAL_MS  = process.env.STATEMENT_NUDGE_INTERVAL_MINUTES
   ? Number(process.env.STATEMENT_NUDGE_INTERVAL_MINUTES) * 60 * 1000
   : 24 * 60 * 60 * 1000; // default 24 hours between stages
 
-const MASTER_DB_RANGE = "'Master DB'!A2:P";
+const MASTER_DB_RANGE = "'Master DB'!A2:R";
 
 async function slackApi(method, body) {
   return slackPost(SLACK_TOKEN, method, body);
@@ -261,38 +261,42 @@ async function pollCycle() {
         const lastMs = thread.lastNudgeAt ? Date.parse(thread.lastNudgeAt) : 0;
         if (now - lastMs < NUDGE_INTERVAL_MS) continue; // not yet 24h
 
-        const stillPending = await recheckPending(thread.pendingCharges);
+        let nextCount = null;
 
-        if (!stillPending.length) {
-          await updateStatementChaseThread(SHEETS_ID, thread.rowNumber, {
-            ...thread, pendingCharges: [], resolved: true,
-          });
-          console.log(`Thread for ${thread.userName} (run ${thread.runId}): all resolved — closing.`);
-          continue;
-        }
+        // Atomic: re-read the thread fresh, decide + send the nudge, and
+        // persist the result all inside one queued task, so a "Not mine"
+        // click landing between this loop's earlier read and now can never
+        // be silently reverted by this write (see updateThreadAtomic).
+        await updateThreadAtomic(SHEETS_ID, { runId: thread.runId, userId: thread.userId }, async (current) => {
+          const stillPending = await recheckPending(current.pendingCharges);
 
-        const nextCount = thread.nudgeCount + 1; // 2 or 3
+          if (!stillPending.length) {
+            console.log(`Thread for ${current.userName} (run ${current.runId}): all resolved — closing.`);
+            return { pendingCharges: [], resolved: true };
+          }
 
-        if (nextCount === 2) {
-          const leadText = buildStage2Lead(thread.userName, stillPending);
-          await slackApi("chat.postMessage", {
-            channel: thread.dmChannelId,
-            thread_ts: thread.threadTs,
-            text: leadText,
-            blocks: buildNotMineBlocks({
-              leadText, trailerText: STAGE2_TRAILER, charges: stillPending,
-              userId: thread.userId, userName: thread.userName, runId: thread.runId,
-            }),
-          });
-          console.log(`Stage 2 nudge → ${thread.userName} (${stillPending.length} charges).`);
-        }
+          nextCount = current.nudgeCount + 1; // 2 or 3
 
-        await updateStatementChaseThread(SHEETS_ID, thread.rowNumber, {
-          ...thread,
-          nudgeCount:     nextCount,
-          lastNudgeAt:    new Date().toISOString(),
-          pendingCharges: stillPending,
-          resolved:       false,
+          if (nextCount === 2) {
+            const leadText = buildStage2Lead(current.userName, stillPending);
+            await slackApi("chat.postMessage", {
+              channel: current.dmChannelId,
+              thread_ts: current.threadTs,
+              text: leadText,
+              blocks: buildNotMineBlocks({
+                leadText, trailerText: STAGE2_TRAILER, charges: stillPending,
+                userId: current.userId, userName: current.userName, runId: current.runId,
+              }),
+            });
+            console.log(`Stage 2 nudge → ${current.userName} (${stillPending.length} charges).`);
+          }
+
+          return {
+            nudgeCount:     nextCount,
+            lastNudgeAt:    new Date().toISOString(),
+            pendingCharges: stillPending,
+            resolved:       false,
+          };
         });
 
         if (nextCount === 3) stage3RunIds.add(thread.runId);
@@ -301,8 +305,14 @@ async function pollCycle() {
       }
     }
 
-    for (const runId of stage3RunIds) {
-      await handleStage3(runId, threads);
+    if (stage3RunIds.size > 0) {
+      // Re-fetch: the atomic loop above may have just updated some of these
+      // threads (nudgeCount, pendingCharges) — `threads` from the top of this
+      // function is stale for any thread just promoted to Stage 3.
+      const freshThreads = await getStatementChaseThreads(SHEETS_ID);
+      for (const runId of stage3RunIds) {
+        await handleStage3(runId, freshThreads);
+      }
     }
   } catch (e) {
     console.error("Statement FinanceCrew cycle failed:", e.message);

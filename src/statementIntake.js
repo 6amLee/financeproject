@@ -5,7 +5,7 @@
 
 import ExcelJS from "exceljs";
 import { normalizeStatement } from "./financeCrew/normalizer.js";
-import { matchReceipts, clusterTransactions, merchantSimilarity } from "./financeCrew/matcher.js";
+import { matchReceipts, clusterTransactions, merchantSimilarity, dateDiffDays } from "./financeCrew/matcher.js";
 import { parseOwnershipSheet } from "./financeCrew/ownership.js";
 import { resolveOwner } from "./financeCrew/resolver.js";
 import { getLedgerEntries } from "./financeCrew/ledger.js";
@@ -13,7 +13,7 @@ import { getNotMineEntries, isExcluded } from "./financeCrew/notMine.js";
 import { resolveSlackId } from "./financeCrew/slackIds.js";
 import { readTabRows } from "./sheets.js";
 
-const MASTER_DB_RANGE = "'Master DB'!A2:P";
+const MASTER_DB_RANGE = "'Master DB'!A2:R";
 const OWNERSHIP_RANGE = "'Vendor Ownership'!A2:J";
 
 // ── Excel parsing ─────────────────────────────────────────────────────────────
@@ -203,21 +203,6 @@ export function buildNotMineBlocks({ leadText, trailerText, charges, userId, use
 const AMOUNT_EPSILON = 0.01;
 const DATE_WINDOW    = { min: -1, max: 3 }; // billingDate − receiptDate in days
 
-function parseDateToDay(s) {
-  const str = String(s ?? "").trim();
-  let match = str.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
-  if (match) {
-    const t = Date.UTC(Number(match[3]), Number(match[2]) - 1, Number(match[1]));
-    return Number.isNaN(t) ? null : t / 86_400_000;
-  }
-  match = str.match(/^(\d{4})-(\d{2})-(\d{2})/);
-  if (match) {
-    const t = Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
-    return Number.isNaN(t) ? null : t / 86_400_000;
-  }
-  return null;
-}
-
 export function findReceiptForCharge(charge, masterRows) {
   for (const row of masterRows) {
     const provider    = String(row[9]  ?? "").trim();
@@ -233,10 +218,13 @@ export function findReceiptForCharge(charge, masterRows) {
     const maxAmt = Math.max(Math.abs(rowAmount), Math.abs(charge.amount ?? 0), 1);
     if (Math.abs(rowAmount - (charge.amount ?? 0)) > AMOUNT_EPSILON * maxAmt) continue;
 
-    // Date window: statement billingDate − receipt date = −1..+3 days
+    // Date window: statement billingDate − receipt date = −1..+3 days.
+    // dateDiffDays returns null for an unparseable date — skip the filter
+    // rather than treating it as a 1970-01-01 mismatch (a bug this used to
+    // have with a local, buggy parseDateToDay + `?? 0` fallback).
     if (charge.billingDate && rowDate) {
-      const diff = (parseDateToDay(charge.billingDate) ?? 0) - (parseDateToDay(rowDate) ?? 0);
-      if (diff < DATE_WINDOW.min || diff > DATE_WINDOW.max) continue;
+      const diff = dateDiffDays(charge.billingDate, rowDate);
+      if (diff !== null && (diff < DATE_WINDOW.min || diff > DATE_WINDOW.max)) continue;
     }
 
     return row; // first match wins — good enough for a "has receipt?" check
@@ -266,10 +254,12 @@ export function matchReceiptToPendingCharge(extracted, pendingCharges) {
     const sim = merchantSimilarity(charge.merchant ?? "", extracted.provider ?? "");
     if (sim < 0.65) continue;
 
-    // Date window: billingDate − receipt date = −1..+3 days
+    // Date window: billingDate − receipt date = −1..+3 days. dateDiffDays
+    // returns null for an unparseable date — skip the filter rather than
+    // falling back to a bogus 1970-01-01 comparison.
     if (charge.billingDate && extracted.date) {
-      const diff = (parseDateToDay(charge.billingDate) ?? 0) - (parseDateToDay(extracted.date) ?? 0);
-      if (diff < DATE_WINDOW.min || diff > DATE_WINDOW.max) continue;
+      const diff = dateDiffDays(charge.billingDate, extracted.date);
+      if (diff !== null && (diff < DATE_WINDOW.min || diff > DATE_WINDOW.max)) continue;
     }
 
     candidates.push({ charge, sim });

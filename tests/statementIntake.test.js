@@ -1,5 +1,49 @@
 import { describe, it, expect } from "vitest";
-import { buildNotMineBlocks } from "../src/statementIntake.js";
+import { buildNotMineBlocks, findReceiptForCharge, matchReceiptToPendingCharge } from "../src/statementIntake.js";
+
+// Master DB column indices used by findReceiptForCharge: D=date(3), F=amount(5), J=provider(9).
+function masterRow({ date, amount, provider }) {
+  const row = new Array(10).fill("");
+  row[3] = date;
+  row[5] = String(amount);
+  row[9] = provider;
+  return row;
+}
+
+describe("findReceiptForCharge", () => {
+  it("matches when the date is within the -1..+3 day window", () => {
+    const charge = { merchant: "Uber", amount: 100, billingDate: "05.07.2026" };
+    const rows = [masterRow({ date: "2026-07-03", amount: 100, provider: "Uber" })];
+    expect(findReceiptForCharge(charge, rows)).toBe(rows[0]);
+  });
+
+  it("rejects when the date is outside the window", () => {
+    const charge = { merchant: "Uber", amount: 100, billingDate: "05.07.2026" };
+    const rows = [masterRow({ date: "2026-06-01", amount: 100, provider: "Uber" })];
+    expect(findReceiptForCharge(charge, rows)).toBeNull();
+  });
+
+  it("does not reject a match just because one date is unparseable — skips the date filter instead of comparing against 1970-01-01", () => {
+    const charge = { merchant: "Uber", amount: 100, billingDate: "05.07.2026" };
+    // A garbled/manually-edited date cell that parseDateToUtcDay can't parse.
+    const rows = [masterRow({ date: "not-a-date", amount: 100, provider: "Uber" })];
+    expect(findReceiptForCharge(charge, rows)).toBe(rows[0]);
+  });
+});
+
+describe("matchReceiptToPendingCharge", () => {
+  it("matches within the date window", () => {
+    const extracted = { amount: 100, provider: "Uber", date: "2026-07-03" };
+    const charges = [{ merchant: "Uber", amount: 100, billingDate: "05.07.2026", clusterKey: "k1" }];
+    expect(matchReceiptToPendingCharge(extracted, charges)).toBe(charges[0]);
+  });
+
+  it("does not reject a match just because the extracted date is unparseable", () => {
+    const extracted = { amount: 100, provider: "Uber", date: "garbage" };
+    const charges = [{ merchant: "Uber", amount: 100, billingDate: "05.07.2026", clusterKey: "k1" }];
+    expect(matchReceiptToPendingCharge(extracted, charges)).toBe(charges[0]);
+  });
+});
 
 describe("buildNotMineBlocks", () => {
   it("groups charges by clusterKey into one section+button pair each", () => {

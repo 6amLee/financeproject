@@ -31,7 +31,7 @@ import {
   matchReceiptToPendingCharge,
   buildNotMineBlocks,
 } from "./src/statementIntake.js";
-import { appendStatementChaseThread, getStatementChaseThreads, updateStatementChaseThread, removePendingCharge } from "./src/financeCrew/statementChase.js";
+import { appendStatementChaseThread, getStatementChaseThreads, updateThreadAtomic, removePendingCharge } from "./src/financeCrew/statementChase.js";
 import { appendStatementRun } from "./src/financeCrew/statementRuns.js";
 import { resolveSlackId } from "./src/financeCrew/slackIds.js";
 import { appendNotMineEntry } from "./src/financeCrew/notMine.js";
@@ -468,6 +468,16 @@ const server = http.createServer((req, res) => {
           const meta  = JSON.parse(action.value || "{}");
           const scope = action.action_id === "statement_not_mine_charge" ? "charge" : "all";
           res.writeHead(200); res.end();
+          // Defense in depth: these buttons only ever get posted into the
+          // intended recipient's own DM, but don't blindly trust the userId
+          // embedded in the button payload — confirm it matches whoever
+          // actually clicked before recording an opt-out on their behalf.
+          if (payload.user?.id && payload.user.id !== meta.userId) {
+            console.error(
+              `Statement not-mine: clicker ${payload.user.id} does not match button's meta.userId ${meta.userId} — ignoring.`
+            );
+            return;
+          }
           handleStatementNotMine({
             scope,
             userId: meta.userId,
@@ -985,11 +995,20 @@ async function handleStatementNotMine({ scope, userId, userName, runId, clusterK
   // Re-render the message: drop the dismissed vendor's section+button (or,
   // for "all", replace the whole thing with a single confirmation line).
   if (channel && messageTs) {
-    const confirmText = scope === "all"
-      ? `Got it, ${userName} — I won't flag any statement charges to you going forward. If that changes, just let Lee know.`
-      : `Got it, ${userName} — noted as not yours. I won't ask about this one again.`;
-
-    if (scope === "all" || !updatedThread || updatedThread.pendingCharges.length === 0) {
+    if (!updatedThread) {
+      // No matching open thread found (already resolved/closed elsewhere,
+      // or a double-click race) — the opt-out is still recorded above via
+      // appendNotMineEntry, but nothing in this specific thread changed, so
+      // say so rather than falsely confirming a dismissal that didn't apply
+      // to anything.
+      const uncertainText = `Noted for future statements, ${userName} — this particular thread was already closed, so there was nothing to update here.`;
+      await slackApi("chat.update", { channel, ts: messageTs, text: uncertainText, blocks: [
+        { type: "section", text: { type: "mrkdwn", text: uncertainText } },
+      ] }).catch((e) => console.warn("Statement not-mine chat.update failed:", e.message));
+    } else if (scope === "all" || updatedThread.pendingCharges.length === 0) {
+      const confirmText = scope === "all"
+        ? `Got it, ${userName} — I won't flag any statement charges to you going forward. If that changes, just let Lee know.`
+        : `Got it, ${userName} — noted as not yours. I won't ask about this one again.`;
       await slackApi("chat.update", { channel, ts: messageTs, text: confirmText, blocks: [
         { type: "section", text: { type: "mrkdwn", text: confirmText } },
       ] }).catch((e) => console.warn("Statement not-mine chat.update failed:", e.message));
@@ -1244,13 +1263,9 @@ async function handleDmReceipt(msg) {
   rowValues[13] = "Matched"; // N column — override default "Pending"
   await appendReceiptRow(SHEETS_ID, rowValues);
 
-  const remaining   = thread.pendingCharges.filter((c) => c.clusterKey !== matched.clusterKey);
-  const allResolved = remaining.length === 0;
-
-  await updateStatementChaseThread(SHEETS_ID, thread.rowNumber, {
-    ...thread,
-    pendingCharges: remaining,
-    resolved:       allResolved,
+  await updateThreadAtomic(SHEETS_ID, { runId: thread.runId, userId: thread.userId }, (current) => {
+    const remaining = current.pendingCharges.filter((c) => c.clusterKey !== matched.clusterKey);
+    return { pendingCharges: remaining, resolved: remaining.length === 0 };
   });
 
   await slackApi("chat.postMessage", {
@@ -1420,8 +1435,15 @@ async function pollCycle() {
     }
 
     for (const msg of ordered) {
-      await handleIncomingMessage(msg);       // no-op if already handled by Events API
-      await setSlackIntakeCursor(SHEETS_ID, msg.ts);
+      try {
+        await handleIncomingMessage(msg);       // no-op if already handled by Events API
+        await setSlackIntakeCursor(SHEETS_ID, msg.ts);
+      } catch (e) {
+        // One bad message must not stall the cursor for the rest of the
+        // batch — log and move on so a transient Sheets write failure
+        // doesn't cause every subsequent message to be reprocessed forever.
+        console.error(`Error processing message ${msg.ts}:`, e.message);
+      }
     }
 
     console.log(`Slack intake: processed ${ordered.length} message(s).`);

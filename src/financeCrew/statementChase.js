@@ -88,15 +88,29 @@ export function updateStatementChaseThread(sheetId, rowNumber, thread) {
   );
 }
 
-// Atomic remove-one-charge (or resolve-everything): re-reads the row fresh
-// from the sheet and writes back INSIDE the same queued task, so two "Not
-// mine" clicks arriving close together can never both read the same stale
-// pendingCharges and have the second silently undo the first. Returns the
-// updated thread, or null if no matching open thread exists.
-//
-// scope "charge": drop clusterKey from pendingCharges; resolved if none left.
-// scope "all": clear pendingCharges and mark resolved unconditionally.
-export function removePendingCharge(sheetId, { runId, userId, scope, clusterKey }) {
+function parseThreadRow(raw, rowNumber) {
+  return {
+    runId:          String(raw[0] ?? "").trim(),
+    userName:       String(raw[1] ?? "").trim(),
+    userId:         String(raw[2] ?? "").trim(),
+    dmChannelId:    String(raw[3] ?? "").trim(),
+    threadTs:       String(raw[4] ?? "").trim(),
+    nudgeCount:     Number(raw[5] ?? 0) || 0,
+    lastNudgeAt:    String(raw[6] ?? "").trim(),
+    pendingCharges: (() => { try { return JSON.parse(raw[7] ?? "[]"); } catch { return []; } })(),
+    resolved:       parseBool(raw[8]),
+    rowNumber,
+  };
+}
+
+// Atomic read-modify-write for a single thread row: re-reads the row fresh
+// from the sheet and writes the updater's result back INSIDE the same queued
+// task, so two writers racing on the same thread (a "Not mine" click, the
+// hourly nudge cycle, a DM receipt match) can never both read the same stale
+// snapshot and have one silently undo the other. `updater(currentThread)`
+// returns the fields to merge in, or `null`/`undefined` to skip writing.
+// Returns the updated thread, or null if no matching row / updater skipped.
+export function updateThreadAtomic(sheetId, { runId, userId }, updater) {
   return enqueue(async () => {
     const res = await getSheets().spreadsheets.values.get({
       spreadsheetId: sheetId,
@@ -111,33 +125,32 @@ export function removePendingCharge(sheetId, { runId, userId, scope, clusterKey 
     );
     if (rowIndex === -1) return null;
 
-    const raw = rows[rowIndex];
-    const current = {
-      runId:          String(raw[0] ?? "").trim(),
-      userName:       String(raw[1] ?? "").trim(),
-      userId:         String(raw[2] ?? "").trim(),
-      dmChannelId:    String(raw[3] ?? "").trim(),
-      threadTs:       String(raw[4] ?? "").trim(),
-      nudgeCount:     Number(raw[5] ?? 0) || 0,
-      lastNudgeAt:    String(raw[6] ?? "").trim(),
-      pendingCharges: (() => { try { return JSON.parse(raw[7] ?? "[]"); } catch { return []; } })(),
-      resolved:       false,
-    };
+    const current = parseThreadRow(rows[rowIndex], rowIndex + 2);
+    const patch = await updater(current);
+    if (!patch) return null;
 
-    const updated = scope === "all"
-      ? { ...current, pendingCharges: [], resolved: true }
-      : (() => {
-          const remaining = current.pendingCharges.filter((c) => c.clusterKey !== clusterKey);
-          return { ...current, pendingCharges: remaining, resolved: remaining.length === 0 };
-        })();
-
+    const updated = { ...current, ...patch };
     await getSheets().spreadsheets.values.update({
       spreadsheetId: sheetId,
-      range: `'${TAB_NAME}'!A${rowIndex + 2}:I${rowIndex + 2}`,
+      range: `'${TAB_NAME}'!A${current.rowNumber}:I${current.rowNumber}`,
       valueInputOption: "RAW",
       requestBody: { values: [buildStatementChaseRow(updated)] },
     });
 
     return updated;
   });
+}
+
+// Remove-one-charge (or resolve-everything), built on updateThreadAtomic.
+// scope "charge": drop clusterKey from pendingCharges; resolved if none left.
+// scope "all": clear pendingCharges and mark resolved unconditionally.
+export function removePendingCharge(sheetId, { runId, userId, scope, clusterKey }) {
+  return updateThreadAtomic(sheetId, { runId, userId }, (current) =>
+    scope === "all"
+      ? { pendingCharges: [], resolved: true }
+      : (() => {
+          const remaining = current.pendingCharges.filter((c) => c.clusterKey !== clusterKey);
+          return { pendingCharges: remaining, resolved: remaining.length === 0 };
+        })()
+  );
 }
