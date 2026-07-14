@@ -31,7 +31,7 @@ Olive is Truvid's internal finance automation bot. It does two things:
 - `index.js` — Gmail intake (polls every few minutes)
 - `slackIntake.js` — Slack receipt intake + statement upload handler + HTTP server for Slack interactions
 - `statementOlive.js` — follow-up nudge cycle (polls hourly)
-- `olive.js` — cluster-based reconciliation (hourly, for the long-running chase state machine)
+- `travels.js` — trip registration, channel management, and nudge lifecycle for company travel
 
 ---
 

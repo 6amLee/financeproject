@@ -1,11 +1,11 @@
-// ── OLIVE LEDGER (learning-ledger Sheet tab I/O) ────────────────────────────
-// Read/write the "Olive Ledger" tab: one row per resolution, the
-// self-maintaining record Stage 2's resolver learns from. Column order:
+// ── OLIVE LEDGER (learning-ledger Sheet tab read) ───────────────────────────
+// Reads the "Olive Ledger" tab: one row per resolution, the record
+// resolver.js's card/vendor history learning consumes. Column order:
 //   vendor · card · resolved_owner (comma-joined if multiple) ·
 //   resolved_at (ISO string) · resolution_source · confirmed (TRUE/FALSE)
 //
-// Follows src/sheets.js's exact patterns: pure builder separate from I/O,
-// singleton sheets client, promise-queue-serialised appends.
+// Read-only — nothing in the live pipeline writes to this tab yet (the write
+// side, appendLedgerEntry, was never wired to anything and was removed).
 
 import { google } from "googleapis";
 import { getGoogleAuth } from "../googleAuth.js";
@@ -56,46 +56,4 @@ export async function getLedgerEntries(sheetId) {
     resolutionSource: String(row[4] ?? "").trim(),
     confirmed: parseConfirmed(row[5]),
   }));
-}
-
-// Pure row builder, separate from the append I/O (same pattern as
-// sheets.js's buildReceiptRow). Accepts resolvedOwner as array or string.
-export function buildLedgerRow(entry) {
-  const owners = Array.isArray(entry.resolvedOwner)
-    ? entry.resolvedOwner
-    : splitOwners(entry.resolvedOwner);
-  return [
-    String(entry.vendor ?? ""),
-    String(entry.card ?? ""),
-    owners.join(", "),
-    String(entry.resolvedAt ?? new Date().toISOString()),
-    String(entry.resolutionSource ?? ""),
-    entry.confirmed ? "TRUE" : "FALSE",
-  ];
-}
-
-// The ledger has its OWN write queue, deliberately separate from sheets.js's
-// _sheetsWriteQueue: ledger appends and Master DB receipt appends target
-// different tabs, so serialising them against each other would only add
-// latency. Appends to THIS tab still serialise among themselves, which is
-// the property the queue exists for.
-let _ledgerWriteQueue = Promise.resolve();
-
-export function appendLedgerEntry(sheetId, entry) {
-  const task = _ledgerWriteQueue.then(() =>
-    getSheets().spreadsheets.values.append({
-      spreadsheetId: sheetId,
-      range: `'${TAB_NAME}'!A1`,
-      valueInputOption: "RAW",
-      insertDataOption: "INSERT_ROWS",
-      requestBody: { values: [buildLedgerRow(entry)] },
-    })
-  );
-  // Keep the queue alive even if this append fails; the error still
-  // propagates to the caller via `task`.
-  _ledgerWriteQueue = task.then(
-    () => {},
-    (e) => console.error("Ledger append error:", e.message)
-  );
-  return task;
 }

@@ -28,8 +28,9 @@ export async function getExistingReceiptNumbers(sheetId) {
 }
 
 // Generic tab read (design doc: extend sheets.js with generic helpers
-// reusable by the Olive modules). Used by olive.js to read Master DB rows
-// and the Vendor Ownership tab. Read-only — doesn't touch the write queue.
+// reusable by the Olive modules). Used by src/statementIntake.js to read
+// Master DB rows and the Vendor Ownership tab. Read-only — doesn't touch
+// the write queue.
 export async function readTabRows(sheetId, rangeA1) {
   const res = await getSheets().spreadsheets.values.get({
     spreadsheetId: sheetId,

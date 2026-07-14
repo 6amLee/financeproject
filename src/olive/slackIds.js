@@ -1,7 +1,8 @@
 // ── SLACK ID MAP ──────────────────────────────────────────────────────────────
-// Single source of truth for name → Slack user ID. Imported by olive.js,
-// statementOlive.js, and slackIntake.js so the mapping is never duplicated.
-// Two names (Gal, Nadav) had multiple matches — confirmed with Lee.
+// Single source of truth for name → Slack user ID. Imported by
+// statementOlive.js, src/statementIntake.js, and slackIntake.js so the
+// mapping is never duplicated. Two names (Gal, Nadav) had multiple matches —
+// confirmed with Lee.
 
 export const SLACK_ID_BY_NAME = {
   Ron:     "U05KWG707DG",

@@ -6,7 +6,7 @@
     "node": ">=18.0.0"
   },
   "scripts": {
-    "start": "node index.js & node olive.js & node slackIntake.js & node statementOlive.js & node travels.js & wait",
+    "start": "node index.js & node slackIntake.js & node statementOlive.js & node travels.js & wait",
     "test": "vitest run",
     "test:watch": "vitest"
   },

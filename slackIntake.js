@@ -34,7 +34,6 @@ import {
 import { appendStatementChaseThread, getStatementChaseThreads, updateStatementChaseThread, removePendingCharge } from "./src/olive/statementChase.js";
 import { appendStatementRun } from "./src/olive/statementRuns.js";
 import { resolveSlackId } from "./src/olive/slackIds.js";
-import { appendLedgerEntry } from "./src/olive/ledger.js";
 import { appendNotMineEntry } from "./src/olive/notMine.js";
 import { getTravelRows, appendTravelRow, updateTravelRow, existingChannel, rowsForEvent } from "./src/travels/travelsSheet.js";
 import { createTripChannel, addEmployeeToChannel } from "./src/travels/travelsSlack.js";
