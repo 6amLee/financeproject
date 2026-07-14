@@ -207,6 +207,27 @@ function selectInput(blockId, label, options, initial, placeholder) {
   };
 }
 
+// `initial` may be a single value or an array — a receipt can cover several
+// people (e.g. a shared taxi or a flight booked for two), and their cost gets
+// split evenly across whoever's selected (see writeReceiptToSheet).
+function multiSelectInput(blockId, label, options, initial, placeholder, optional = false) {
+  const initialValues = Array.isArray(initial) ? initial : (initial ? [initial] : []);
+  const initialOpts = options.filter((o) => initialValues.includes(o.value));
+  return {
+    type: "input",
+    block_id: blockId,
+    optional,
+    label: { type: "plain_text", text: label },
+    element: {
+      type: "multi_static_select",
+      action_id: "val",
+      options,
+      ...(initialOpts.length ? { initial_options: initialOpts } : {}),
+      ...(placeholder ? { placeholder: { type: "plain_text", text: placeholder } } : {}),
+    },
+  };
+}
+
 function buildConfirmView({ parsed, meta }) {
   const p = parsed || {};
   const ccLabel = CC_OPTIONS.find((o) => o.value === p.cc_last4)?.text?.text || p.cc_last4 || null;
@@ -250,16 +271,21 @@ async function buildModal({ prepped, meta }) {
 
   // For trip receipts, ask who the expense is FOR — the cardholder or Slack
   // submitter often isn't the traveler (e.g. Ron's card paying for Aviad's
-  // flight, or Lee submitting a receipt on Roee's behalf).
+  // flight, or Lee submitting a receipt on Roee's behalf). Multi-select:
+  // a receipt can cover several people at once (a shared taxi, or one
+  // flight booking for two) — cost is split evenly across whoever's picked.
   let travelerField = [];
   if (meta?.trip) {
     const allRows = await getTravelRows(SHEETS_ID).catch(() => []);
     const tripEmployees = rowsForEvent(allRows, meta.trip).map((r) => r.employee).filter(Boolean);
     if (tripEmployees.length) {
-      travelerField = [selectInput("traveler", "Traveler (who is this expense for?)",
+      const initial = p.traveler
+        ? p.traveler.split(",").map((s) => s.trim()).filter(Boolean)
+        : (tripEmployees.includes(meta.userName) ? [meta.userName] : []);
+      travelerField = [multiSelectInput("traveler", "Traveler(s) (who is this expense for?)",
         tripEmployees.map((e) => opt(e)),
-        p.traveler || (tripEmployees.includes(meta.userName) ? meta.userName : null),
-        "Select traveler")];
+        initial,
+        "Select traveler(s)", true)];
     }
   }
 
@@ -536,7 +562,7 @@ const server = http.createServer((req, res) => {
             cc_last4:     cv.cc_last4?.val?.selected_option?.value ?? null,
             receipt_no:   cv.receipt_no?.val?.value ?? null,
             notes:        cv.notes?.val?.value ?? null,
-            traveler:     cv.traveler?.val?.selected_option?.value ?? null,
+            traveler:     (cv.traveler?.val?.selected_options || []).map((o) => o.value).join(", ") || null,
           };
           const meta = JSON.parse(payload.view?.private_metadata || "{}");
           await slackApi("views.update", {
@@ -585,7 +611,7 @@ const server = http.createServer((req, res) => {
           cc_last4:     cc || null,
           receipt_no:   pick("receipt_no") || null,
           notes:        pick("notes") || null,
-          traveler:     pick("traveler") || null,
+          traveler:     (vals.traveler?.val?.selected_options || []).map((o) => o.value).join(", ") || null,
         };
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({

@@ -42,18 +42,30 @@ export async function buildTripSummary(sheetId, eventName, travelRows) {
   // it (those can differ, e.g. Ron's card paying for Aviad's flight, or Lee
   // submitting a receipt on Roee's behalf). Falls back to cardholder/source
   // only for older rows written before the Traveler column existed.
+  //
+  // A receipt can cover several people at once (traveler is comma-joined,
+  // e.g. "Aviad Zamir, Roee" for a shared taxi or a two-passenger flight) —
+  // split the amount evenly across everyone named so the trip GRAND TOTAL
+  // never double-counts a shared receipt, while each person's own total still
+  // reflects their fair share.
   const byEmployee = new Map();
   for (const row of tripReceipts) {
-    const traveler = String(row[MASTER_COL.traveler] ?? "").trim();
-    const employee = traveler || String(row[MASTER_COL.cardholder] ?? row[MASTER_COL.source] ?? "Unknown").trim();
+    const travelerCell = String(row[MASTER_COL.traveler] ?? "").trim();
+    const travelers = travelerCell
+      ? travelerCell.split(",").map((s) => s.trim()).filter(Boolean)
+      : [String(row[MASTER_COL.cardholder] ?? row[MASTER_COL.source] ?? "Unknown").trim()];
     const provider = String(row[MASTER_COL.provider] ?? "").trim();
     const amount   = parseFloat(String(row[MASTER_COL.amount] ?? "").replace(/,/g, "")) || 0;
     const currency = String(row[MASTER_COL.currency] ?? "ILS").trim().toUpperCase();
+    const share    = amount / travelers.length;
+    const sharedLabel = travelers.length > 1 ? ` (split ${travelers.length} ways)` : "";
 
-    if (!byEmployee.has(employee)) byEmployee.set(employee, { receipts: [], totals: {} });
-    const entry = byEmployee.get(employee);
-    entry.receipts.push({ provider, amount, currency });
-    entry.totals[currency] = (entry.totals[currency] ?? 0) + amount;
+    for (const employee of travelers) {
+      if (!byEmployee.has(employee)) byEmployee.set(employee, { receipts: [], totals: {} });
+      const entry = byEmployee.get(employee);
+      entry.receipts.push({ provider: `${provider}${sharedLabel}`, amount: share, currency });
+      entry.totals[currency] = (entry.totals[currency] ?? 0) + share;
+    }
   }
 
   const rows = [...byEmployee.entries()].map(([employee, data]) => ({
