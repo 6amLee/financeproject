@@ -100,6 +100,15 @@ function normaliseMime(slackMime) {
 
 const REIMBURSE_PATTERN = /\b(personal|personally|mine|my own|reimburse|reimbursement|paid myself|i paid)\b/i;
 
+// ── RESERVATIONS ZONE ─────────────────────────────────────────────────────────
+// /reservations opens a thread where uploads are never processed — no Drive
+// upload, no Claude extraction, no sheet row, nothing. Deliberately in-memory
+// only (no sheet persistence): resets on restart, which is fine since a
+// restart just means running /reservations again if still actively dropping
+// non-receipt docs (itineraries, hotel confirmations, etc.) into the trip
+// channel alongside real receipts.
+const reservationThreadRoots = new Set();
+
 // ── SLACK API ─────────────────────────────────────────────────────────────────
 
 async function slackApi(method, body) {
@@ -348,6 +357,10 @@ const server = http.createServer((req, res) => {
         if (ev?.bot_id || ev?.subtype === "bot_message") return; // ignore our own / other bots' messages
 
         if (ev?.files?.length) {
+          // Reservations zone: a reply inside a /reservations thread is
+          // never processed — no Drive upload, no Claude call, no sheet row.
+          if (ev.thread_ts && reservationThreadRoots.has(ev.thread_ts)) return;
+
           const isStatements = STATEMENTS_CHANNEL && ev.channel === STATEMENTS_CHANNEL;
           const isDm         = !isStatements && ev.channel?.startsWith("D");
           // Check if the upload is in a known travel channel.
@@ -370,22 +383,41 @@ const server = http.createServer((req, res) => {
       return;
     }
 
-    // ── Slash commands (/financecrewtravels) ─────────────────────────────────
+    // ── Slash commands (/financecrewtravels, /reservations) ──────────────────
     if (isCommands) {
       const params = new URLSearchParams(rawBody);
       const command = params.get("command");
       const text    = (params.get("text") || "").trim();
       const userId  = params.get("user_id");
       const triggerId = params.get("trigger_id");
+      const channelId = params.get("channel_id");
 
       res.writeHead(200, { "Content-Type": "application/json" });
+
+      if (command === "/reservations") {
+        res.end();
+        slackApi("chat.postMessage", {
+          channel: channelId,
+          text:
+            `📎 *Reservations zone open* — reply to *this message* with any files ` +
+            `(itineraries, hotel confirmations, boarding passes, anything non-financial). ` +
+            `I won't process, extract, or log anything dropped in this thread.`,
+        }).then((slackRes) => {
+          const ts = slackRes.message?.ts || slackRes.ts;
+          if (ts) reservationThreadRoots.add(ts);
+        }).catch((e) => console.error("Reservations command failed:", e.message));
+        return;
+      }
 
       if (command === "/financecrewtravels") {
         const [sub, ...rest] = text.split(/\s+/);
 
         if (!sub || sub === "register") {
-          // Ack Slack immediately — must respond within 3s.
-          res.writeHead(200); res.end();
+          // Ack Slack immediately — must respond within 3s. (res.writeHead
+          // was already called above with the JSON content-type header;
+          // calling it again here would throw "Cannot set headers after
+          // they are sent" — just end() the already-opened response.)
+          res.end();
           slackApi("views.open", {
             trigger_id: triggerId,
             view: buildTravelRegistrationModal(),
