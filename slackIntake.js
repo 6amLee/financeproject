@@ -31,10 +31,10 @@ import {
   matchReceiptToPendingCharge,
   buildNotMineBlocks,
 } from "./src/statementIntake.js";
-import { appendStatementChaseThread, getStatementChaseThreads, updateStatementChaseThread, removePendingCharge } from "./src/olive/statementChase.js";
-import { appendStatementRun } from "./src/olive/statementRuns.js";
-import { resolveSlackId } from "./src/olive/slackIds.js";
-import { appendNotMineEntry } from "./src/olive/notMine.js";
+import { appendStatementChaseThread, getStatementChaseThreads, updateStatementChaseThread, removePendingCharge } from "./src/financeCrew/statementChase.js";
+import { appendStatementRun } from "./src/financeCrew/statementRuns.js";
+import { resolveSlackId } from "./src/financeCrew/slackIds.js";
+import { appendNotMineEntry } from "./src/financeCrew/notMine.js";
 import { getTravelRows, appendTravelRow, updateTravelRow, existingChannel, rowsForEvent } from "./src/travels/travelsSheet.js";
 import { createTripChannel, addEmployeeToChannel } from "./src/travels/travelsSlack.js";
 import { buildTripSummary } from "./src/travels/travelsSummary.js";
@@ -80,7 +80,7 @@ const YULIA_SLACK_ID      = process.env.YULIA_SLACK_ID || "";
 const FINANCE_ADMIN_SLACK_ID = process.env.FINANCE_ADMIN_SLACK_ID || "";
 const STATEMENT_DRY_RUN   = process.env.STATEMENT_DRY_RUN === "true";
 
-// Who's allowed to ask Olive natural-language travel questions in a DM —
+// Who's allowed to ask FinanceCrew natural-language travel questions in a DM —
 // intentionally narrow (financial cost data), not "anyone @truvid.com".
 const TRAVEL_QA_ALLOWED_IDS = new Set([YULIA_SLACK_ID, FINANCE_ADMIN_SLACK_ID].filter(Boolean));
 
@@ -370,7 +370,7 @@ const server = http.createServer((req, res) => {
       return;
     }
 
-    // ── Slash commands (/olivetravels) ───────────────────────────────────────
+    // ── Slash commands (/financecrewtravels) ─────────────────────────────────
     if (isCommands) {
       const params = new URLSearchParams(rawBody);
       const command = params.get("command");
@@ -380,7 +380,7 @@ const server = http.createServer((req, res) => {
 
       res.writeHead(200, { "Content-Type": "application/json" });
 
-      if (command === "/olivetravels") {
+      if (command === "/financecrewtravels") {
         const [sub, ...rest] = text.split(/\s+/);
 
         if (!sub || sub === "register") {
@@ -403,7 +403,7 @@ const server = http.createServer((req, res) => {
         } else {
           res.end(JSON.stringify({
             response_type: "ephemeral",
-            text: "Usage: `/olivetravels` · `/olivetravels summary DMEXCO` · `/olivetravels cancel DMEXCO`",
+            text: "Usage: `/financecrewtravels` · `/financecrewtravels summary DMEXCO` · `/financecrewtravels cancel DMEXCO`",
           }));
         }
         return;

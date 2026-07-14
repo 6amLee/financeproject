@@ -1,4 +1,4 @@
-// ── OLIVE: VENDOR OWNERSHIP SHEET PARSER ────────────────────────────────────
+// ── FINANCECREW: VENDOR OWNERSHIP SHEET PARSER ──────────────────────────────
 // Best-effort parse of the (messy, free-text) Vendor Ownership sheet.
 // Input-agnostic like the normalizer: takes the already-fetched 2D array
 // (rows × columns) — the Sheets fetch itself lives with the caller, not here.
@@ -6,7 +6,7 @@
 // Returns { map, needsReview }:
 //   map         — { [vendorName]: { owners, cardsSeen, recurring, aliases } }
 //   needsReview — raw rows whose non-blank Owner(s) text yielded zero clean
-//                 names (surfaced in Olive's report, never silently dropped)
+//                 names (surfaced in FinanceCrew's report, never silently dropped)
 
 // Column order per the real sheet:
 // Vendor · Owner(s) · Type · Card(s) seen · Typical amount · Currency ·

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { normalizeStatement } from "../src/olive/normalizer.js";
+import { normalizeStatement } from "../src/financeCrew/normalizer.js";
 
 // Fixture built from real rows in the actual Hebrew statement export read
 // during the design session — real section titles, real Hebrew merchants,

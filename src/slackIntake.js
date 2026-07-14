@@ -1,7 +1,7 @@
 // ── SLACK INTAKE HELPERS ───────────────────────────────────────────────────────
 // Slack Web API calls needed for the receipt intake channel: read channel
 // history, download a file, resolve a user display name. Uses native fetch
-// (same pattern as olive's sendSlackMessage — no SDK dependency).
+// (same pattern as FinanceCrew's sendSlackMessage — no SDK dependency).
 
 const SLACK_API = "https://slack.com/api";
 

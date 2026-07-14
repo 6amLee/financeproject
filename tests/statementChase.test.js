@@ -15,7 +15,7 @@ vi.mock("../src/googleAuth.js", () => ({
   getGoogleAuth: vi.fn(() => ({})),
 }));
 
-const { removePendingCharge } = await import("../src/olive/statementChase.js");
+const { removePendingCharge } = await import("../src/financeCrew/statementChase.js");
 
 beforeEach(() => {
   mockGet.mockReset();

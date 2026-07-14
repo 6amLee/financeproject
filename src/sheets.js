@@ -28,7 +28,7 @@ export async function getExistingReceiptNumbers(sheetId) {
 }
 
 // Generic tab read (design doc: extend sheets.js with generic helpers
-// reusable by the Olive modules). Used by src/statementIntake.js to read
+// reusable by the FinanceCrew modules). Used by src/statementIntake.js to read
 // Master DB rows and the Vendor Ownership tab. Read-only — doesn't touch
 // the write queue.
 export async function readTabRows(sheetId, rangeA1) {
@@ -71,7 +71,7 @@ export function appendErrorRow(sheetId, { service, messageId, sender, subject, a
   return task;
 }
 
-// "Unanswered Questions" tab — every travel DM question Olive couldn't
+// "Unanswered Questions" tab — every travel DM question FinanceCrew couldn't
 // confidently answer (no intent, or no matching trip/employee). Reviewed
 // periodically to decide which should become a new supported intent.
 // Columns: Logged at · Asker · Question · Guessed intent · Guessed event ·

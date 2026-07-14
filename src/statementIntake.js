@@ -4,13 +4,13 @@
 // grouped by owner name. Pure processing — no Slack or Sheet writes here.
 
 import ExcelJS from "exceljs";
-import { normalizeStatement } from "./olive/normalizer.js";
-import { matchReceipts, clusterTransactions, merchantSimilarity } from "./olive/matcher.js";
-import { parseOwnershipSheet } from "./olive/ownership.js";
-import { resolveOwner } from "./olive/resolver.js";
-import { getLedgerEntries } from "./olive/ledger.js";
-import { getNotMineEntries, isExcluded } from "./olive/notMine.js";
-import { resolveSlackId } from "./olive/slackIds.js";
+import { normalizeStatement } from "./financeCrew/normalizer.js";
+import { matchReceipts, clusterTransactions, merchantSimilarity } from "./financeCrew/matcher.js";
+import { parseOwnershipSheet } from "./financeCrew/ownership.js";
+import { resolveOwner } from "./financeCrew/resolver.js";
+import { getLedgerEntries } from "./financeCrew/ledger.js";
+import { getNotMineEntries, isExcluded } from "./financeCrew/notMine.js";
+import { resolveSlackId } from "./financeCrew/slackIds.js";
 import { readTabRows } from "./sheets.js";
 
 const MASTER_DB_RANGE = "'Master DB'!A2:P";
@@ -132,7 +132,7 @@ export function formatCharge(charge) {
 }
 
 // ── Not-mine buttons ──────────────────────────────────────────────────────────
-// Shared by handleStatementUpload (Stage 1) and statementOlive.js (Stage 2/3):
+// Shared by handleStatementUpload (Stage 1) and statementFinanceCrew.js (Stage 2/3):
 // one Slack section block per vendor/cluster with its amounts, plus a
 // per-charge "Not mine" button, followed by a single "None of these are
 // mine" button for the whole message. Both button values carry

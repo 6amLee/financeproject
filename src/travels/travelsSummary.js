@@ -1,6 +1,6 @@
 // ── TRAVELS SUMMARY (trip cost query) ────────────────────────────────────────
 // Reads Master DB receipts tagged to a specific trip and returns a per-employee
-// breakdown. Used by both the /olivetravels summary command and the natural-
+// breakdown. Used by both the /financecrewtravels summary command and the natural-
 // language DM handler ("how much did DMEXCO cost?").
 //
 // Amounts are grouped per currency — we don't attempt live exchange-rate
@@ -9,7 +9,7 @@
 
 import { google } from "googleapis";
 import { getGoogleAuth } from "../googleAuth.js";
-import { MASTER_COL } from "../olive/matcher.js";
+import { MASTER_COL } from "../financeCrew/matcher.js";
 
 const MASTER_DB_RANGE = "'Master DB'!A2:R";
 

@@ -5,7 +5,7 @@ import {
   merchantSimilarity,
   dateDiffDays,
   MASTER_COL,
-} from "../src/olive/matcher.js";
+} from "../src/financeCrew/matcher.js";
 
 // ── Fixture helpers ──────────────────────────────────────────────────────────
 // Master DB rows are arrays in buildReceiptRow() column order (see

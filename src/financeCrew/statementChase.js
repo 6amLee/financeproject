@@ -1,6 +1,6 @@
 // ── STATEMENT CHASE THREADS (Sheet tab I/O) ───────────────────────────────────
 // One row per person per statement run being chased. Tracks the DM thread
-// Olive opened, the nudge count, and the JSON list of still-pending charges.
+// FinanceCrew opened, the nudge count, and the JSON list of still-pending charges.
 //
 // Column order:
 //   run_id · user_name · user_id · dm_channel_id · thread_ts ·

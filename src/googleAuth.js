@@ -35,7 +35,7 @@ function loadCredentials() {
   }
 }
 
-// Used by Sheets and all Olive modules.
+// Used by Sheets and all FinanceCrew modules.
 export function getGoogleAuth() {
   if (_auth) return _auth;
   _auth = new google.auth.GoogleAuth({ credentials: loadCredentials(), scopes: SHEETS_SCOPES });

@@ -1,5 +1,5 @@
-// ── OLIVE LEDGER (learning-ledger Sheet tab read) ───────────────────────────
-// Reads the "Olive Ledger" tab: one row per resolution, the record
+// ── FINANCECREW LEDGER (learning-ledger Sheet tab read) ─────────────────────
+// Reads the "FinanceCrew Ledger" tab: one row per resolution, the record
 // resolver.js's card/vendor history learning consumes. Column order:
 //   vendor · card · resolved_owner (comma-joined if multiple) ·
 //   resolved_at (ISO string) · resolution_source · confirmed (TRUE/FALSE)
@@ -10,7 +10,7 @@
 import { google } from "googleapis";
 import { getGoogleAuth } from "../googleAuth.js";
 
-const TAB_NAME = "Olive Ledger";
+const TAB_NAME = "FinanceCrew Ledger";
 // Row 1 is the header; data starts at A2.
 const DATA_RANGE = `'${TAB_NAME}'!A2:F`;
 

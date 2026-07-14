@@ -12,7 +12,7 @@ function getDrive() {
 }
 
 // Download a Drive file by ID and return it as a base64 string.
-// Used by statementOlive.js to re-load the original statement Excel for
+// Used by statementFinanceCrew.js to re-load the original statement Excel for
 // re-matching and coloring without keeping it in memory between poll cycles.
 export async function downloadDriveFile(fileId) {
   const res = await getDrive().files.get(

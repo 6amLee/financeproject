@@ -16,7 +16,7 @@ vi.mock("../src/googleAuth.js", () => ({
 }));
 
 const { getNotMineEntries, appendNotMineEntry, buildNotMineRow, isExcluded } = await import(
-  "../src/olive/notMine.js"
+  "../src/financeCrew/notMine.js"
 );
 
 beforeEach(() => {

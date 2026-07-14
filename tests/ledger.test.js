@@ -14,7 +14,7 @@ vi.mock("../src/googleAuth.js", () => ({
   getGoogleAuth: vi.fn(() => ({})),
 }));
 
-const { getLedgerEntries } = await import("../src/olive/ledger.js");
+const { getLedgerEntries } = await import("../src/financeCrew/ledger.js");
 
 beforeEach(() => {
   mockGet.mockReset();
@@ -35,7 +35,7 @@ describe("getLedgerEntries", () => {
 
     expect(mockGet).toHaveBeenCalledWith({
       spreadsheetId: "sheet-123",
-      range: "'Olive Ledger'!A2:F",
+      range: "'FinanceCrew Ledger'!A2:F",
     });
     expect(entries).toEqual([
       {
