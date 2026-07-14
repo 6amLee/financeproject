@@ -4,7 +4,9 @@
 //   employee · slack_id · event · destination · departure_date · return_date ·
 //   ticket_link · channel_id · channel_name · eshel_status · eshel_amount ·
 //   receipts_status · employee_notified · eshel_t7_sent · eshel_t3_sent ·
-//   eshel_t1_sent · departure_nudge_sent · return_nudge_sent · receipts_t7_sent
+//   eshel_t1_sent · departure_nudge_sent · return_nudge_sent · receipts_t7_sent ·
+//   day_before_nudge_sent · mid_trip_nudge_sent · receipts_t3_sent ·
+//   receipts_t11_sent · receipts_t13_sent
 //
 // Same patterns as chaseState.js: pure row builder, singleton sheets client,
 // promise-queue-serialised writes, in-place row updates by rowNumber.
@@ -13,7 +15,7 @@ import { google } from "googleapis";
 import { getGoogleAuth } from "../googleAuth.js";
 
 const TAB_NAME = "Travels";
-const DATA_RANGE = `'${TAB_NAME}'!A2:S`;
+const DATA_RANGE = `'${TAB_NAME}'!A2:X`;
 
 const COL = {
   employee:           0,
@@ -32,9 +34,14 @@ const COL = {
   eshelT7Sent:        13,
   eshelT3Sent:        14,
   eshelT1Sent:        15,
-  departureNudgeSent: 16,
+  departureNudgeSent: 16, // legacy — no longer fired (kept for existing rows/backward compat)
   returnNudgeSent:    17,
   receiptsT7Sent:     18,
+  dayBeforeNudgeSent: 19,
+  midTripNudgeSent:   20,
+  receiptsT3Sent:     21,
+  receiptsT11Sent:    22,
+  receiptsT13Sent:    23,
 };
 
 let _sheets = null;
@@ -73,6 +80,11 @@ export async function getTravelRows(sheetId) {
     departureNudgeSent: parseBool(row[COL.departureNudgeSent]),
     returnNudgeSent:    parseBool(row[COL.returnNudgeSent]),
     receiptsT7Sent:     parseBool(row[COL.receiptsT7Sent]),
+    dayBeforeNudgeSent: parseBool(row[COL.dayBeforeNudgeSent]),
+    midTripNudgeSent:   parseBool(row[COL.midTripNudgeSent]),
+    receiptsT3Sent:     parseBool(row[COL.receiptsT3Sent]),
+    receiptsT11Sent:    parseBool(row[COL.receiptsT11Sent]),
+    receiptsT13Sent:    parseBool(row[COL.receiptsT13Sent]),
     rowNumber: i + 2,
   }));
 }
@@ -98,6 +110,11 @@ export function buildTravelRow(t) {
     t.departureNudgeSent ? "TRUE" : "FALSE",
     t.returnNudgeSent    ? "TRUE" : "FALSE",
     t.receiptsT7Sent     ? "TRUE" : "FALSE",
+    t.dayBeforeNudgeSent ? "TRUE" : "FALSE",
+    t.midTripNudgeSent   ? "TRUE" : "FALSE",
+    t.receiptsT3Sent     ? "TRUE" : "FALSE",
+    t.receiptsT11Sent    ? "TRUE" : "FALSE",
+    t.receiptsT13Sent    ? "TRUE" : "FALSE",
   ];
 }
 
@@ -128,7 +145,7 @@ export function updateTravelRow(sheetId, rowNumber, travel) {
   return enqueue(() =>
     getSheets().spreadsheets.values.update({
       spreadsheetId: sheetId,
-      range: `'${TAB_NAME}'!A${rowNumber}:S${rowNumber}`,
+      range: `'${TAB_NAME}'!A${rowNumber}:X${rowNumber}`,
       valueInputOption: "RAW",
       requestBody: { values: [buildTravelRow(travel)] },
     })
