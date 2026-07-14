@@ -31,7 +31,7 @@ import {
   matchReceiptToPendingCharge,
   buildNotMineBlocks,
 } from "./src/statementIntake.js";
-import { appendStatementChaseThread, getStatementChaseThreads, updateStatementChaseThread } from "./src/olive/statementChase.js";
+import { appendStatementChaseThread, getStatementChaseThreads, updateStatementChaseThread, removePendingCharge } from "./src/olive/statementChase.js";
 import { appendStatementRun } from "./src/olive/statementRuns.js";
 import { resolveSlackId } from "./src/olive/slackIds.js";
 import { appendLedgerEntry } from "./src/olive/ledger.js";
@@ -977,21 +977,11 @@ async function handleStatementNotMine({ scope, userId, userName, runId, clusterK
 
   await appendNotMineEntry(SHEETS_ID, { userId, userName, scope, clusterKey, declaredAt: new Date().toISOString() });
 
-  const allThreads = await getStatementChaseThreads(SHEETS_ID);
-  const thread = allThreads.find((t) => t.runId === runId && t.userId === userId && !t.resolved);
-
-  if (thread) {
-    if (scope === "all") {
-      await updateStatementChaseThread(SHEETS_ID, thread.rowNumber, { ...thread, pendingCharges: [], resolved: true });
-    } else {
-      const remaining = (thread.pendingCharges || []).filter((c) => c.clusterKey !== clusterKey);
-      await updateStatementChaseThread(SHEETS_ID, thread.rowNumber, {
-        ...thread,
-        pendingCharges: remaining,
-        resolved: remaining.length === 0,
-      });
-    }
-  }
+  // Atomic: reads the thread and writes the trimmed pendingCharges back
+  // inside one queued task, so two "Not mine" clicks arriving close together
+  // can never both read the same stale list and have the second silently
+  // undo the first (see statementChase.js's removePendingCharge).
+  const updatedThread = await removePendingCharge(SHEETS_ID, { runId, userId, scope, clusterKey });
 
   // Re-render the message: drop the dismissed vendor's section+button (or,
   // for "all", replace the whole thing with a single confirmation line).
@@ -1000,7 +990,7 @@ async function handleStatementNotMine({ scope, userId, userName, runId, clusterK
       ? `Got it, ${userName} — I won't flag any statement charges to you going forward. If that changes, just let Lee know.`
       : `Got it, ${userName} — noted as not yours. I won't ask about this one again.`;
 
-    if (scope === "all" || !thread || (thread.pendingCharges || []).length === 0) {
+    if (scope === "all" || !updatedThread || updatedThread.pendingCharges.length === 0) {
       await slackApi("chat.update", { channel, ts: messageTs, text: confirmText, blocks: [
         { type: "section", text: { type: "mrkdwn", text: confirmText } },
       ] }).catch((e) => console.warn("Statement not-mine chat.update failed:", e.message));
@@ -1008,7 +998,7 @@ async function handleStatementNotMine({ scope, userId, userName, runId, clusterK
       const leadText = `Got it — noted. Here's what's still open, ${userName}:`;
       await slackApi("chat.update", {
         channel, ts: messageTs, text: leadText,
-        blocks: buildNotMineBlocks({ leadText, charges: thread.pendingCharges, userId, userName, runId }),
+        blocks: buildNotMineBlocks({ leadText, charges: updatedThread.pendingCharges, userId, userName, runId }),
       }).catch((e) => console.warn("Statement not-mine chat.update failed:", e.message));
     }
   }

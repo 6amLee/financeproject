@@ -87,3 +87,57 @@ export function updateStatementChaseThread(sheetId, rowNumber, thread) {
     })
   );
 }
+
+// Atomic remove-one-charge (or resolve-everything): re-reads the row fresh
+// from the sheet and writes back INSIDE the same queued task, so two "Not
+// mine" clicks arriving close together can never both read the same stale
+// pendingCharges and have the second silently undo the first. Returns the
+// updated thread, or null if no matching open thread exists.
+//
+// scope "charge": drop clusterKey from pendingCharges; resolved if none left.
+// scope "all": clear pendingCharges and mark resolved unconditionally.
+export function removePendingCharge(sheetId, { runId, userId, scope, clusterKey }) {
+  return enqueue(async () => {
+    const res = await getSheets().spreadsheets.values.get({
+      spreadsheetId: sheetId,
+      range: DATA_RANGE,
+    });
+    const rows = res.data.values || [];
+    const rowIndex = rows.findIndex(
+      (row) =>
+        String(row[0] ?? "").trim() === runId &&
+        String(row[2] ?? "").trim() === userId &&
+        !parseBool(row[8])
+    );
+    if (rowIndex === -1) return null;
+
+    const raw = rows[rowIndex];
+    const current = {
+      runId:          String(raw[0] ?? "").trim(),
+      userName:       String(raw[1] ?? "").trim(),
+      userId:         String(raw[2] ?? "").trim(),
+      dmChannelId:    String(raw[3] ?? "").trim(),
+      threadTs:       String(raw[4] ?? "").trim(),
+      nudgeCount:     Number(raw[5] ?? 0) || 0,
+      lastNudgeAt:    String(raw[6] ?? "").trim(),
+      pendingCharges: (() => { try { return JSON.parse(raw[7] ?? "[]"); } catch { return []; } })(),
+      resolved:       false,
+    };
+
+    const updated = scope === "all"
+      ? { ...current, pendingCharges: [], resolved: true }
+      : (() => {
+          const remaining = current.pendingCharges.filter((c) => c.clusterKey !== clusterKey);
+          return { ...current, pendingCharges: remaining, resolved: remaining.length === 0 };
+        })();
+
+    await getSheets().spreadsheets.values.update({
+      spreadsheetId: sheetId,
+      range: `'${TAB_NAME}'!A${rowIndex + 2}:I${rowIndex + 2}`,
+      valueInputOption: "RAW",
+      requestBody: { values: [buildStatementChaseRow(updated)] },
+    });
+
+    return updated;
+  });
+}
