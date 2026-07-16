@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { buildNotMineBlocks, findReceiptForCharge, matchReceiptToPendingCharge } from "../src/statementIntake.js";
+import { buildNotMineBlocks, findReceiptForCharge, matchReceiptToPendingCharge, formatDateCell } from "../src/statementIntake.js";
+import { dateDiffDays } from "../src/financeCrew/matcher.js";
 
 // Master DB column indices used by findReceiptForCharge: D=date(3), E=currency(4), F=amount(5), J=provider(9).
 function masterRow({ date, amount, provider, currency = "" }) {
@@ -10,6 +11,27 @@ function masterRow({ date, amount, provider, currency = "" }) {
   row[9] = provider;
   return row;
 }
+
+describe("formatDateCell", () => {
+  it("formats a native Date as DD.MM.YYYY, the format every downstream date parser expects", () => {
+    // The exact bug this guards against: ExcelJS returns a native Date for a
+    // date-formatted cell, and String(dateObj) — what cellStr()/
+    // parseDateToUtcDay do — produces "Tue Jun 02 2026 00:00:00 GMT+0000..."
+    // instead of a parseable string, silently making the billing period
+    // "unknown" for every such row and cold-starting the owner resolver to
+    // all 9 fallback names instead of a real owner.
+    expect(formatDateCell(new Date(Date.UTC(2026, 5, 2)))).toBe("02.06.2026"); // month is 0-indexed (5 = June)
+  });
+
+  it("pads single-digit day and month", () => {
+    expect(formatDateCell(new Date(Date.UTC(2026, 0, 5)))).toBe("05.01.2026");
+  });
+
+  it("round-trips through dateDiffDays exactly like a hand-typed statement date would", () => {
+    const formatted = formatDateCell(new Date(Date.UTC(2026, 6, 13))); // 13.07.2026
+    expect(dateDiffDays(formatted, "2026-07-10")).toBe(3);
+  });
+});
 
 describe("findReceiptForCharge", () => {
   it("matches when the date is within the -1..+3 day window", () => {

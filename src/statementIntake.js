@@ -18,6 +18,16 @@ const OWNERSHIP_RANGE = "'Vendor Ownership'!A2:J";
 
 // ── Excel parsing ─────────────────────────────────────────────────────────────
 
+// DD.MM.YYYY — the format every date-consuming call site in normalizer.js /
+// matcher.js expects (see matcher.js's parseDateToUtcDay). A UTC-based
+// format avoids the cell's local-timezone Date drifting the day number.
+export function formatDateCell(d) {
+  const day   = String(d.getUTCDate()).padStart(2, "0");
+  const month = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const year  = d.getUTCFullYear();
+  return `${day}.${month}.${year}`;
+}
+
 export async function parseStatementExcel(base64Data) {
   const buffer = Buffer.from(base64Data, "base64");
   const workbook = new ExcelJS.Workbook();
@@ -29,7 +39,17 @@ export async function parseStatementExcel(base64Data) {
     // exceljs row.values is 1-indexed; slice(1) normalises to 0-indexed
     const cells = row.values.slice(1).map((v) => {
       if (v === null || v === undefined) return null;
-      if (typeof v === "object" && v.result !== undefined) return v.result;
+      // A date-formatted cell comes back as a native Date, not a string —
+      // String(dateObj) (what every downstream cellStr()/parseDateToUtcDay
+      // call does) produces "Tue Jun 02 2026 00:00:00 GMT+0000..." which
+      // parseDateToUtcDay can't parse, silently making every such row's
+      // billing period "unknown" and falling through to cold-start owner
+      // resolution. Format it the same way the statement's own text cells
+      // are written (DD.MM.YYYY) so it flows through identically.
+      if (v instanceof Date) return formatDateCell(v);
+      if (typeof v === "object" && v.result !== undefined) {
+        return v.result instanceof Date ? formatDateCell(v.result) : v.result;
+      }
       if (typeof v === "object" && v.text !== undefined) return v.text;
       return v;
     });
