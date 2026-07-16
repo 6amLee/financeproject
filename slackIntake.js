@@ -1267,16 +1267,22 @@ async function handleStatementStatusCommand(requestingUserId) {
     getStatementChaseThreads(SHEETS_ID),
   ]);
 
-  const activeRuns = runs.filter((r) => r.status === "active");
-  const latestRun = activeRuns[activeRuns.length - 1];
-
-  if (!latestRun) {
+  if (!runs.length) {
     await slackApi("chat.postMessage", {
       channel: requestingUserId,
-      text: "No statement run is currently in progress — nothing to report.",
+      text: "No statement has been uploaded yet — nothing to report.",
     });
     return;
   }
+
+  const activeRuns = runs.filter((r) => r.status === "active");
+  // Fall back to the single most-recently-started run even if it just
+  // finished its nudge cycle — otherwise asking right after Stage 3
+  // completes (exactly when someone most wants a final tally) reports
+  // nothing, same reasoning as refreshStatementStatusTab in
+  // statementFinanceCrew.js.
+  const latestRun = activeRuns[activeRuns.length - 1] ?? runs[runs.length - 1];
+  const latestRunIsComplete = !activeRuns.some((r) => r.runId === latestRun.runId);
 
   const runThreads = threads.filter((t) => t.runId === latestRun.runId);
   if (!runThreads.length) {
@@ -1307,13 +1313,16 @@ async function handleStatementStatusCommand(requestingUserId) {
 
   // Also refresh the "Statement Status" sheet tab so it reflects this same
   // just-computed state, not just the hourly poll's last pass — across ALL
-  // active runs' threads (not just this one) so the tab stays consistent
-  // regardless of which run the command happened to check.
+  // active runs' threads, PLUS the fallback completed run above (so the tab
+  // stays consistent with the same "keep the most recent run visible" rule
+  // used in statementFinanceCrew.js), regardless of which run the command
+  // happened to check.
   try {
     const activeRunIds = new Set(activeRuns.map((r) => r.runId));
+    const completedRunId = latestRunIsComplete ? latestRun.runId : null;
     const now = new Date().toISOString();
     const statusEntries = threads
-      .filter((t) => activeRunIds.has(t.runId))
+      .filter((t) => activeRunIds.has(t.runId) || t.runId === completedRunId)
       .flatMap((t) =>
         (t.pendingCharges ?? []).map((charge) => ({
           runId: t.runId,
@@ -1322,6 +1331,7 @@ async function handleStatementStatusCommand(requestingUserId) {
           accountedFor: findReceiptForCharge(charge, masterRows) !== null,
           nudgeCount: t.nudgeCount,
           lastChecked: now,
+          stageOverride: t.runId === completedRunId ? "Complete — still missing" : null,
         }))
       );
     await writeStatementStatusTab(SHEETS_ID, statusEntries);
@@ -1330,7 +1340,10 @@ async function handleStatementStatusCommand(requestingUserId) {
   }
 
   const totalMatchedSinceStage1 = totalOriginal - totalStillPending;
-  const stageLabel = (n) => (n <= 1 ? "Stage 1 (just sent)" : n === 2 ? "Stage 2" : "Stage 3 (final)");
+  const stageLabel = (n) =>
+    latestRunIsComplete
+      ? "Complete — no further nudges"
+      : n <= 1 ? "Stage 1 (just sent)" : n === 2 ? "Stage 2" : "Stage 3 (final)";
 
   const lines = perPerson
     .filter((p) => !p.resolved)
@@ -1341,7 +1354,8 @@ async function handleStatementStatusCommand(requestingUserId) {
   const clearLines = perPerson.filter((p) => p.resolved).map((p) => `• *${p.userName}*: all clear ✅`);
 
   const text =
-    `📋 *Statement status* — run started ${latestRun.startedAt || "recently"}\n` +
+    `📋 *Statement status* — run started ${latestRun.startedAt || "recently"}` +
+    (latestRunIsComplete ? ` (nudge cycle complete)` : "") + `\n` +
     `*${totalMatchedSinceStage1}/${totalOriginal}* charges accounted for so far, *${totalStillPending}* still outstanding.\n\n` +
     (lines.length ? `*Still missing:*\n${lines.join("\n")}\n\n` : "") +
     (clearLines.length ? `*Accounted for:*\n${clearLines.join("\n")}` : "");

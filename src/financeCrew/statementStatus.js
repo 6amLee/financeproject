@@ -33,7 +33,10 @@ function stageLabel(n) {
 // resolved-since-last-check — callers pass a flat list already computed
 // (accountedFor is a plain boolean, not re-derived here; this module is pure
 // Sheet I/O, same separation as statementRuns.js / statementChase.js).
-export function buildStatementStatusRow({ runId, person, charge, accountedFor, nudgeCount, lastChecked }) {
+// `stageOverride` lets a caller replace the nudgeCount-derived label — used
+// for a run that has finished its 3-nudge cycle (no further nudge will fire,
+// so "Stage 3 (final)" no longer describes what's happening).
+export function buildStatementStatusRow({ runId, person, charge, accountedFor, nudgeCount, lastChecked, stageOverride }) {
   return [
     String(runId ?? ""),
     String(person ?? ""),
@@ -42,7 +45,7 @@ export function buildStatementStatusRow({ runId, person, charge, accountedFor, n
     String(charge?.currency ?? ""),
     String(charge?.billingDate ?? ""),
     accountedFor ? "Yes" : "No",
-    stageLabel(nudgeCount ?? 1),
+    stageOverride ?? stageLabel(nudgeCount ?? 1),
     String(lastChecked ?? new Date().toISOString()),
   ];
 }

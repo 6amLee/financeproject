@@ -244,21 +244,36 @@ async function handleStage3(runId, allThreads) {
 // ── Statement Status tab refresh ──────────────────────────────────────────────
 // Rebuilds the "Statement Status" tab from scratch every poll cycle so it's
 // always current without anyone having to ask — one row per still-tracked
-// charge across every still-active run, re-checked against the live Master DB
-// the same way recheckPending does. Runs regardless of whether any nudge
-// fired this cycle.
+// charge, re-checked against the live Master DB the same way recheckPending
+// does. Runs regardless of whether any nudge fired this cycle.
+//
+// Scope: every "active" run, PLUS the single most-recently-started run even
+// if it just flipped to "complete" at Stage 3 — otherwise the tab goes blank
+// at the exact moment the chase concludes (the moment someone most wants a
+// final tally), before the next statement upload starts a new run. A
+// completed run's still-outstanding charges get "Complete — still missing"
+// as their stage label instead of "Stage 3 (final)", since no further nudge
+// will fire for them.
 //
 // A person who has cleared everything has no rows here at all — once a
 // thread resolves, pendingCharges is wiped (see updateThreadAtomic call
 // sites), so there's no original charge list left to show as "accounted
 // for". Absence from this tab means "nothing left to track for them", not
-// "unknown" — this tab only ever lists open work, never a full history.
+// "unknown" — this tab only ever lists open (or just-closed) work, never a
+// full history across every past run.
 
 async function refreshStatementStatusTab(threads) {
   try {
     const runs = await getStatementRuns(SHEETS_ID);
+    if (!runs.length) return;
+
     const activeRunIds = new Set(runs.filter((r) => r.status === "active").map((r) => r.runId));
-    const relevantThreads = threads.filter((t) => activeRunIds.has(t.runId));
+    const mostRecentRun = runs[runs.length - 1]; // appended in upload order
+    const completedMostRecentId = !activeRunIds.has(mostRecentRun.runId) ? mostRecentRun.runId : null;
+
+    const relevantThreads = threads.filter(
+      (t) => activeRunIds.has(t.runId) || t.runId === completedMostRecentId
+    );
     if (!relevantThreads.length) return;
 
     const masterRows = await readTabRows(SHEETS_ID, MASTER_DB_RANGE);
@@ -266,6 +281,7 @@ async function refreshStatementStatusTab(threads) {
     const entries = [];
 
     for (const thread of relevantThreads) {
+      const isCompletedRun = thread.runId === completedMostRecentId;
       for (const charge of thread.pendingCharges ?? []) {
         entries.push({
           runId: thread.runId,
@@ -274,6 +290,7 @@ async function refreshStatementStatusTab(threads) {
           accountedFor: findReceiptForCharge(charge, masterRows) !== null,
           nudgeCount: thread.nudgeCount,
           lastChecked: now,
+          stageOverride: isCompletedRun ? "Complete — still missing" : null,
         });
       }
     }

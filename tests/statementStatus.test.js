@@ -59,6 +59,14 @@ describe("buildStatementStatusRow", () => {
     expect(row[7]).toBe("Stage 3 (final)");
   });
 
+  it("uses stageOverride instead of the nudgeCount-derived label when provided", () => {
+    const row = buildStatementStatusRow({
+      runId: "run_1", person: "Ron", charge: {}, accountedFor: false, nudgeCount: 3,
+      stageOverride: "Complete — still missing",
+    });
+    expect(row[7]).toBe("Complete — still missing");
+  });
+
   it("defaults missing charge fields to empty strings rather than throwing", () => {
     const row = buildStatementStatusRow({ runId: "run_1", person: "Lee", charge: {}, accountedFor: false });
     expect(row.slice(2, 6)).toEqual(["", "", "", ""]);
