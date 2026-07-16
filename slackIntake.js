@@ -23,6 +23,7 @@ import {
   getSlackIntakeCursor,
   setSlackIntakeCursor,
   setReceiptStatus,
+  readTabRows,
 } from "./src/sheets.js";
 import {
   runStatementComparison,
@@ -30,9 +31,11 @@ import {
   formatCharge,
   matchReceiptToPendingCharge,
   buildNotMineBlocks,
+  findReceiptForCharge,
 } from "./src/statementIntake.js";
 import { appendStatementChaseThread, getStatementChaseThreads, updateThreadAtomic, removePendingCharge } from "./src/financeCrew/statementChase.js";
-import { appendStatementRun } from "./src/financeCrew/statementRuns.js";
+import { appendStatementRun, getStatementRuns } from "./src/financeCrew/statementRuns.js";
+import { writeStatementStatusTab } from "./src/financeCrew/statementStatus.js";
 import { resolveSlackId } from "./src/financeCrew/slackIds.js";
 import { appendNotMineEntry } from "./src/financeCrew/notMine.js";
 import { getTravelRows, appendTravelRow, updateTravelRow, existingChannel, rowsForEvent } from "./src/travels/travelsSheet.js";
@@ -79,6 +82,7 @@ const STATEMENTS_CHANNEL  = process.env.SLACK_STATEMENTS_CHANNEL || "";
 const YULIA_SLACK_ID      = process.env.YULIA_SLACK_ID || "";
 const FINANCE_ADMIN_SLACK_ID = process.env.FINANCE_ADMIN_SLACK_ID || "";
 const STATEMENT_DRY_RUN   = process.env.STATEMENT_DRY_RUN === "true";
+const MASTER_DB_RANGE     = "'Master DB'!A2:R";
 
 // Who's allowed to ask FinanceCrew natural-language travel questions in a DM —
 // intentionally narrow (financial cost data), not "anyone @truvid.com".
@@ -462,6 +466,25 @@ const server = http.createServer((req, res) => {
           res.end(JSON.stringify({
             response_type: "ephemeral",
             text: "Usage: `/financecrewtravels` · `/financecrewtravels summary DMEXCO` · `/financecrewtravels cancel DMEXCO`",
+          }));
+        }
+        return;
+      }
+
+      if (command === "/financecrewstatement") {
+        const [sub] = text.split(/\s+/);
+        if (!TRAVEL_QA_ALLOWED_IDS.has(userId)) {
+          res.end(JSON.stringify({ response_type: "ephemeral", text: "Only Yulia and finance admin can check statement status." }));
+          return;
+        }
+        if (!sub || sub === "status") {
+          res.end(JSON.stringify({ response_type: "ephemeral", text: "Checking the latest statement run…" }));
+          handleStatementStatusCommand(userId)
+            .catch((e) => console.error("Statement status error:", e.message));
+        } else {
+          res.end(JSON.stringify({
+            response_type: "ephemeral",
+            text: "Usage: `/financecrewstatement status` — current matched/missing breakdown for the latest statement run.",
           }));
         }
         return;
@@ -1229,6 +1252,101 @@ async function handleStatementUpload(msg) {
         ? `\n:grey_question: *${comparison.ambiguousCount}* charge(s) matched more than one possible receipt — still being chased, but worth a look to avoid a duplicate.`
         : ""),
   }).catch(() => {});
+}
+
+// ── STATEMENT STATUS COMMAND ───────────────────────────────────────────────────
+// On-demand interim status for whoever's chasing a statement (Yulia/finance
+// admin) — no need to wait for Stage 3 to see matched vs. still-missing.
+// Re-checks every open thread's pending charges live against the current
+// Master DB (a receipt may have arrived since the last nudge), rather than
+// trusting each thread's last-known pendingCharges list verbatim.
+
+async function handleStatementStatusCommand(requestingUserId) {
+  const [runs, threads] = await Promise.all([
+    getStatementRuns(SHEETS_ID),
+    getStatementChaseThreads(SHEETS_ID),
+  ]);
+
+  const activeRuns = runs.filter((r) => r.status === "active");
+  const latestRun = activeRuns[activeRuns.length - 1];
+
+  if (!latestRun) {
+    await slackApi("chat.postMessage", {
+      channel: requestingUserId,
+      text: "No statement run is currently in progress — nothing to report.",
+    });
+    return;
+  }
+
+  const runThreads = threads.filter((t) => t.runId === latestRun.runId);
+  if (!runThreads.length) {
+    await slackApi("chat.postMessage", {
+      channel: requestingUserId,
+      text: `Statement run from ${latestRun.startedAt || "recently"} has no chase threads on file.`,
+    });
+    return;
+  }
+
+  const masterRows = await readTabRows(SHEETS_ID, MASTER_DB_RANGE);
+
+  let totalOriginal = 0;
+  let totalStillPending = 0;
+  const perPerson = [];
+
+  for (const thread of runThreads) {
+    const original = thread.pendingCharges ?? [];
+    totalOriginal += original.length;
+    if (thread.resolved || !original.length) {
+      perPerson.push({ userName: thread.userName, stillPending: [], nudgeCount: thread.nudgeCount, resolved: true });
+      continue;
+    }
+    const stillPending = original.filter((charge) => findReceiptForCharge(charge, masterRows) === null);
+    totalStillPending += stillPending.length;
+    perPerson.push({ userName: thread.userName, stillPending, nudgeCount: thread.nudgeCount, resolved: stillPending.length === 0 });
+  }
+
+  // Also refresh the "Statement Status" sheet tab so it reflects this same
+  // just-computed state, not just the hourly poll's last pass — across ALL
+  // active runs' threads (not just this one) so the tab stays consistent
+  // regardless of which run the command happened to check.
+  try {
+    const activeRunIds = new Set(activeRuns.map((r) => r.runId));
+    const now = new Date().toISOString();
+    const statusEntries = threads
+      .filter((t) => activeRunIds.has(t.runId))
+      .flatMap((t) =>
+        (t.pendingCharges ?? []).map((charge) => ({
+          runId: t.runId,
+          person: t.userName,
+          charge,
+          accountedFor: findReceiptForCharge(charge, masterRows) !== null,
+          nudgeCount: t.nudgeCount,
+          lastChecked: now,
+        }))
+      );
+    await writeStatementStatusTab(SHEETS_ID, statusEntries);
+  } catch (e) {
+    console.warn(`Statement Status tab refresh (on-demand) failed: ${e.message}`);
+  }
+
+  const totalMatchedSinceStage1 = totalOriginal - totalStillPending;
+  const stageLabel = (n) => (n <= 1 ? "Stage 1 (just sent)" : n === 2 ? "Stage 2" : "Stage 3 (final)");
+
+  const lines = perPerson
+    .filter((p) => !p.resolved)
+    .map((p) =>
+      `• *${p.userName}* (${stageLabel(p.nudgeCount)}): ${p.stillPending.map((c) => formatCharge(c)).join(" | ")}`
+    );
+
+  const clearLines = perPerson.filter((p) => p.resolved).map((p) => `• *${p.userName}*: all clear ✅`);
+
+  const text =
+    `📋 *Statement status* — run started ${latestRun.startedAt || "recently"}\n` +
+    `*${totalMatchedSinceStage1}/${totalOriginal}* charges accounted for so far, *${totalStillPending}* still outstanding.\n\n` +
+    (lines.length ? `*Still missing:*\n${lines.join("\n")}\n\n` : "") +
+    (clearLines.length ? `*Accounted for:*\n${clearLines.join("\n")}` : "");
+
+  await slackApi("chat.postMessage", { channel: requestingUserId, text });
 }
 
 // ── DM RECEIPT HANDLER ────────────────────────────────────────────────────────

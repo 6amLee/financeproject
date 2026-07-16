@@ -23,6 +23,7 @@ import {
 } from "./src/statementIntake.js";
 import { downloadDriveFile } from "./src/drive.js";
 import { colorStatementExcel } from "./src/statementColoring.js";
+import { writeStatementStatusTab } from "./src/financeCrew/statementStatus.js";
 
 if (typeof process.loadEnvFile === "function") {
   try { process.loadEnvFile(); } catch { /* no .env — Railway injects directly */ }
@@ -240,6 +241,50 @@ async function handleStage3(runId, allThreads) {
   }
 }
 
+// ── Statement Status tab refresh ──────────────────────────────────────────────
+// Rebuilds the "Statement Status" tab from scratch every poll cycle so it's
+// always current without anyone having to ask — one row per still-tracked
+// charge across every still-active run, re-checked against the live Master DB
+// the same way recheckPending does. Runs regardless of whether any nudge
+// fired this cycle.
+//
+// A person who has cleared everything has no rows here at all — once a
+// thread resolves, pendingCharges is wiped (see updateThreadAtomic call
+// sites), so there's no original charge list left to show as "accounted
+// for". Absence from this tab means "nothing left to track for them", not
+// "unknown" — this tab only ever lists open work, never a full history.
+
+async function refreshStatementStatusTab(threads) {
+  try {
+    const runs = await getStatementRuns(SHEETS_ID);
+    const activeRunIds = new Set(runs.filter((r) => r.status === "active").map((r) => r.runId));
+    const relevantThreads = threads.filter((t) => activeRunIds.has(t.runId));
+    if (!relevantThreads.length) return;
+
+    const masterRows = await readTabRows(SHEETS_ID, MASTER_DB_RANGE);
+    const now = new Date().toISOString();
+    const entries = [];
+
+    for (const thread of relevantThreads) {
+      for (const charge of thread.pendingCharges ?? []) {
+        entries.push({
+          runId: thread.runId,
+          person: thread.userName,
+          charge,
+          accountedFor: findReceiptForCharge(charge, masterRows) !== null,
+          nudgeCount: thread.nudgeCount,
+          lastChecked: now,
+        });
+      }
+    }
+
+    await writeStatementStatusTab(SHEETS_ID, entries);
+    console.log(`Statement Status tab refreshed: ${entries.length} charge row(s).`);
+  } catch (e) {
+    console.warn(`Statement Status tab refresh failed: ${e.message}`);
+  }
+}
+
 // ── Poll cycle ────────────────────────────────────────────────────────────────
 
 async function pollCycle() {
@@ -250,6 +295,7 @@ async function pollCycle() {
 
     if (openThreads.length === 0) {
       console.log("No open statement chase threads.");
+      await refreshStatementStatusTab(threads);
       return;
     }
 
@@ -305,15 +351,19 @@ async function pollCycle() {
       }
     }
 
+    // Re-fetch: the atomic loop above updated some threads (nudgeCount,
+    // pendingCharges) — `threads` from the top of this function is stale for
+    // any thread the loop just touched. Stage 3 handling and the status tab
+    // refresh both need the current state.
+    const freshThreads = await getStatementChaseThreads(SHEETS_ID);
+
     if (stage3RunIds.size > 0) {
-      // Re-fetch: the atomic loop above may have just updated some of these
-      // threads (nudgeCount, pendingCharges) — `threads` from the top of this
-      // function is stale for any thread just promoted to Stage 3.
-      const freshThreads = await getStatementChaseThreads(SHEETS_ID);
       for (const runId of stage3RunIds) {
         await handleStage3(runId, freshThreads);
       }
     }
+
+    await refreshStatementStatusTab(await getStatementChaseThreads(SHEETS_ID));
   } catch (e) {
     console.error("Statement FinanceCrew cycle failed:", e.message);
   }
