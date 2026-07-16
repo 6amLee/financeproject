@@ -1,10 +1,11 @@
 import { describe, it, expect } from "vitest";
 import { buildNotMineBlocks, findReceiptForCharge, matchReceiptToPendingCharge } from "../src/statementIntake.js";
 
-// Master DB column indices used by findReceiptForCharge: D=date(3), F=amount(5), J=provider(9).
-function masterRow({ date, amount, provider }) {
+// Master DB column indices used by findReceiptForCharge: D=date(3), E=currency(4), F=amount(5), J=provider(9).
+function masterRow({ date, amount, provider, currency = "" }) {
   const row = new Array(10).fill("");
   row[3] = date;
+  row[4] = currency;
   row[5] = String(amount);
   row[9] = provider;
   return row;
@@ -28,6 +29,28 @@ describe("findReceiptForCharge", () => {
     // A garbled/manually-edited date cell that parseDateToUtcDay can't parse.
     const rows = [masterRow({ date: "not-a-date", amount: 100, provider: "Uber" })];
     expect(findReceiptForCharge(charge, rows)).toBe(rows[0]);
+  });
+
+  it("still matches when currency is blank on either side (legacy rows) — preserves prior lenient behavior", () => {
+    const charge = { merchant: "Uber", amount: 100, billingDate: "05.07.2026" }; // no currency field
+    const rows = [masterRow({ date: "2026-07-03", amount: 100, provider: "Uber" })]; // no currency
+    expect(findReceiptForCharge(charge, rows)).toBe(rows[0]);
+  });
+
+  it("matches an ILS receipt against a foreign-currency charge using the statement's own amountIls conversion", () => {
+    const charge = {
+      merchant: "Anthropic", amount: 100, currency: "USD", amountIls: 369.5, billingDate: "05.07.2026",
+    };
+    const rows = [masterRow({ date: "2026-07-03", amount: 369.5, currency: "ILS", provider: "Anthropic" })];
+    expect(findReceiptForCharge(charge, rows)).toBe(rows[0]);
+  });
+
+  it("does NOT cross-match two unrelated same-priced charges in different, both-known currencies (false-positive this used to allow)", () => {
+    // Same merchant/amount number, but a EUR charge should never satisfy a
+    // USD charge just because the raw numbers coincide.
+    const charge = { merchant: "Anthropic", amount: 100, currency: "USD", billingDate: "05.07.2026" };
+    const rows = [masterRow({ date: "2026-07-03", amount: 100, currency: "EUR", provider: "Anthropic" })];
+    expect(findReceiptForCharge(charge, rows)).toBeNull();
   });
 });
 

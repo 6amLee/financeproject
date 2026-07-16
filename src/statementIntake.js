@@ -5,7 +5,7 @@
 
 import ExcelJS from "exceljs";
 import { normalizeStatement } from "./financeCrew/normalizer.js";
-import { matchReceipts, clusterTransactions, merchantSimilarity, dateDiffDays } from "./financeCrew/matcher.js";
+import { matchReceipts, clusterTransactions, merchantSimilarity, dateDiffDays, DATE_WINDOW_DAYS } from "./financeCrew/matcher.js";
 import { parseOwnershipSheet } from "./financeCrew/ownership.js";
 import { resolveOwner } from "./financeCrew/resolver.js";
 import { getLedgerEntries } from "./financeCrew/ledger.js";
@@ -58,10 +58,24 @@ export async function runStatementComparison({ base64Data, sheetsId }) {
   const matchResults = matchReceipts(statementRows, masterRows, ownershipMap);
   const clusters = clusterTransactions(statementRows, ownershipMap);
 
-  // Statement rows with a confident reconciled match — excluded from chasing
+  // Statement rows excluded from chasing: a confident "reconciled" match, or
+  // a "review" match (a plausible Master DB receipt already exists — the
+  // only open question is a currency/card mismatch a human should resolve
+  // directly against that row, not something re-nudging the person
+  // resolves). "ambiguous" (2+ candidates, genuinely unresolved) and
+  // "missing" (0 candidates) stay in the chase pool. A "review" result's
+  // candidates can be more than one (e.g. several cross-currency
+  // possibilities) — exclude all of them, not just the first.
   const matchedStatementRows = new Set(
-    matchResults.filter((r) => r.status === "reconciled").map((r) => r.match.statementRow)
+    matchResults
+      .filter((r) => r.status === "reconciled" || r.status === "review")
+      .flatMap((r) => r.candidates.map((c) => c.statementRow))
   );
+
+  // Surfaced in the Stage 1 channel summary so review/ambiguous cases are
+  // visible instead of silently falling through.
+  const reviewCount = matchResults.filter((r) => r.status === "review").length;
+  const ambiguousCount = matchResults.filter((r) => r.status === "ambiguous").length;
 
   // Clusters with at least one unmatched transaction + resolved owner
   const resolvedClusters = [];
@@ -101,6 +115,8 @@ export async function runStatementComparison({ base64Data, sheetsId }) {
     totalCharges:    statementRows.filter((r) => !r.refund).length,
     matchedCount:    matchedStatementRows.size,
     unmatchedCount:  resolvedClusters.reduce((s, { pendingTxns }) => s + pendingTxns.length, 0),
+    reviewCount,               // "review": a plausible Master DB receipt exists but needs a human look (currency/card mismatch) — excluded from chasing, not nudged
+    ambiguousCount,            // "ambiguous": 2+ plausible receipts — still nudged, but worth flagging as noisy/duplicate-prone
   };
 }
 
@@ -114,6 +130,7 @@ export function buildPendingCharge(txn, clusterKey) {
     merchant:    txn.merchant    ?? null,
     amount:      txn.amount      ?? null,
     currency:    txn.currency    ?? null,
+    amountIls:   txn.amountIls   ?? null,
     card:        txn.card        ?? null,
     billingDate: txn.billingDate ?? null,
     txnDate:     txn.txnDate     ?? null,
@@ -201,22 +218,39 @@ export function buildNotMineBlocks({ leadText, trailerText, charges, userId, use
 // explicitly reconciles it — so we treat any receipt row as a candidate).
 
 const AMOUNT_EPSILON = 0.01;
-const DATE_WINDOW    = { min: -1, max: 3 }; // billingDate − receiptDate in days
+const DATE_WINDOW    = DATE_WINDOW_DAYS; // billingDate − receiptDate in days — shared with matcher.js
 
 export function findReceiptForCharge(charge, masterRows) {
+  const chargeCurrency = String(charge.currency ?? "").trim().toUpperCase();
+
   for (const row of masterRows) {
-    const provider    = String(row[9]  ?? "").trim();
-    const rowAmount   = Number(String(row[5] ?? "").replace(/,/g, ""));
-    const rowDate     = String(row[3]  ?? "").trim();
+    const provider     = String(row[9]  ?? "").trim();
+    const rowAmount    = Number(String(row[5] ?? "").replace(/,/g, ""));
+    const rowDate      = String(row[3]  ?? "").trim();
+    const rowCurrency  = String(row[4]  ?? "").trim().toUpperCase();
 
     if (!provider || isNaN(rowAmount) || rowAmount === 0) continue;
 
     // Merchant similarity ≥ 0.7
     if (merchantSimilarity(charge.merchant ?? "", provider) < 0.7) continue;
 
-    // Amount within 1%
-    const maxAmt = Math.max(Math.abs(rowAmount), Math.abs(charge.amount ?? 0), 1);
-    if (Math.abs(rowAmount - (charge.amount ?? 0)) > AMOUNT_EPSILON * maxAmt) continue;
+    // Currency-aware amount check: same currency (or either side blank/
+    // unverifiable, preserving the original lenient behavior) compares
+    // directly against the charge's original amount. Only when BOTH
+    // currencies are known and genuinely differ do we require a resolved
+    // comparison — a receipt logged in ILS against a foreign-currency charge
+    // compares against the statement's own converted amountIls instead (the
+    // bank's actual conversion), so it can't cross-match two unrelated
+    // same-priced charges in different currencies (the false-positive risk
+    // this used to have) while still not being blocked by missing data.
+    const bothCurrenciesKnown = chargeCurrency !== "" && rowCurrency !== "";
+    const sameCurrency = !bothCurrenciesKnown || chargeCurrency === rowCurrency;
+    const useConverted = bothCurrenciesKnown && !sameCurrency && rowCurrency === "ILS" && charge.amountIls != null;
+    if (bothCurrenciesKnown && !sameCurrency && !useConverted) continue;
+
+    const compareAmount = useConverted ? charge.amountIls : (charge.amount ?? 0);
+    const maxAmt = Math.max(Math.abs(rowAmount), Math.abs(compareAmount), 1);
+    if (Math.abs(rowAmount - compareAmount) > AMOUNT_EPSILON * maxAmt) continue;
 
     // Date window: statement billingDate − receipt date = −1..+3 days.
     // dateDiffDays returns null for an unparseable date — skip the filter

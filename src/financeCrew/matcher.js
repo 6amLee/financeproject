@@ -42,7 +42,10 @@ const TIP_TOLERANCE_TYPES = new Set(["Team lunch/ Dinner", "Taxi/Train/Bus"]);
 const TIP_TOLERANCE = 1.25;
 
 const MERCHANT_SIMILARITY_THRESHOLD = 0.8;
-const DATE_WINDOW_DAYS = { min: -1, max: 3 }; // statement billingDate − receipt Date
+// Shared across all three matchers in this module and statementIntake.js —
+// the billingDate-vs-receiptDate acceptable range shouldn't drift between
+// call sites, unlike merchant/amount tolerance which differ by design.
+export const DATE_WINDOW_DAYS = { min: -1, max: 3 }; // statement billingDate − receipt Date
 const AMOUNT_EPSILON = 0.005;
 
 // ── Merchant similarity ──────────────────────────────────────────────────────
@@ -138,6 +141,23 @@ function amountMatches(receiptAmount, statementAmount, expenseType) {
   return null;
 }
 
+// FX-fee tolerance: the bank adds a foreign-transaction fee on top of the
+// converted amount, so a receipt amount that's slightly UNDER the statement's
+// own converted (ILS) figure is expected, not a mismatch. Receipt may run up
+// to 3% under the statement — never over (a fee only adds to the bank's side).
+const FX_FEE_TOLERANCE = 0.03;
+function amountMatchesConverted(receiptAmount, statementAmountIls) {
+  if (statementAmountIls === null) return null;
+  if (Math.abs(statementAmountIls - receiptAmount) < AMOUNT_EPSILON) return "exact";
+  if (
+    receiptAmount <= statementAmountIls + AMOUNT_EPSILON &&
+    receiptAmount >= statementAmountIls * (1 - FX_FEE_TOLERANCE) - AMOUNT_EPSILON
+  ) {
+    return "fx-tolerance";
+  }
+  return null;
+}
+
 // Merchant rule: fuzzy similarity ≥ 0.8 against Provider, OR exact
 // case-insensitive match against any ownership-sheet alias for that vendor
 // (looked up by the Provider name, case-insensitively).
@@ -218,20 +238,31 @@ export function matchReceipts(statementRows, masterDbRows, ownershipMap = {}) {
       const merchant = merchantMatches(stmt.merchant, provider, ownershipMap);
       if (!merchant) continue;
 
-      const amountMode = amountMatches(receiptAmount, stmt.amount, expenseType);
-      if (amountMode === null) continue;
-
-      // Currency gate LAST, so an amount+date+merchant hit in a different (or
-      // unverifiable) currency can be surfaced as a review candidate rather
-      // than silently dropped. Same currency on both sides is required for an
-      // auto-match; a missing currency on either side can't be verified, so
-      // it also routes to review rather than auto-matching.
       const stmtCurrency = norm(stmt.currency);
       const sameCurrency =
         receiptCurrency !== "" &&
         stmtCurrency !== "" &&
         receiptCurrency.toUpperCase() === stmtCurrency.toUpperCase();
 
+      // Cross-currency: if the receipt was logged in ILS (the bank's own
+      // settlement currency) and the statement's original currency isn't ILS,
+      // compare against the statement's own converted `amountIls` figure
+      // instead of the foreign-currency `amount` — this is the bank's actual
+      // conversion, not a guessed rate, and lets a foreign-currency charge
+      // auto-reconcile against an ILS receipt instead of always falling to
+      // review. Skip entirely if either currency is unverifiable.
+      const useConverted =
+        !sameCurrency && receiptCurrency.toUpperCase() === "ILS" && stmtCurrency !== "";
+      const amountMode = useConverted
+        ? amountMatchesConverted(receiptAmount, stmt.amountIls)
+        : amountMatches(receiptAmount, stmt.amount, expenseType);
+      if (amountMode === null) continue;
+
+      // Currency gate LAST, so an amount+date+merchant hit in a different (or
+      // unverifiable) currency can be surfaced as a review candidate rather
+      // than silently dropped. Same currency (or a resolved FX conversion) is
+      // required for an auto-match; a missing currency on either side can't
+      // be verified, so it also routes to review rather than auto-matching.
       const card = cardSignal(stmt.card, masterCard);
       const candidate = {
         statementRow: stmt,
@@ -247,7 +278,7 @@ export function matchReceipts(statementRows, masterDbRows, ownershipMap = {}) {
           card,
         }),
       };
-      (sameCurrency ? candidates : crossCurrency).push(candidate);
+      (sameCurrency || useConverted ? candidates : crossCurrency).push(candidate);
     }
 
     const base = { masterIndex, masterRow };

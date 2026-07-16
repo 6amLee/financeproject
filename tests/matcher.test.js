@@ -162,6 +162,48 @@ describe("matchReceipts — core rules", () => {
     expect(res.candidates).toHaveLength(1);
   });
 
+  it("auto-reconciles an ILS receipt against a foreign-currency statement row using the bank's own amountIls conversion", () => {
+    // Receipt logged in ILS (₪369.50); statement row is a USD charge that the
+    // bank converted to ₪369.50 — same underlying charge, different currency
+    // fields, so the naive cross-currency path used to always demote this to
+    // "review" even though the bank's own conversion makes it a clean match.
+    const master = masterRow({ provider: "Anthropic", currency: "ILS", amount: "369.50" });
+    const s = stmt({ merchant: "ANTHROPIC", amount: 100, currency: "USD", amountIls: 369.5 });
+    const [res] = matchReceipts([s], [master]);
+    expect(res.status).toBe("reconciled");
+    expect(res.match.amountMode).toBe("exact");
+  });
+
+  it("applies FX-fee tolerance: ILS receipt may run up to 3% under the statement's converted amount (bank fee), never over", () => {
+    const master = masterRow({ provider: "Anthropic", currency: "ILS", amount: "360" }); // receipt is under
+    const s = stmt({ merchant: "ANTHROPIC", amount: 100, currency: "USD", amountIls: 369.5 }); // bank charged more (fee)
+    const [res] = matchReceipts([s], [master]);
+    expect(res.status).toBe("reconciled");
+    expect(res.match.amountMode).toBe("fx-tolerance");
+  });
+
+  it("does NOT stretch FX-fee tolerance beyond 3%, nor allow the receipt to run OVER the converted amount", () => {
+    const tooFarUnder = masterRow({ provider: "Anthropic", currency: "ILS", amount: "350" }); // >3% under
+    const s = stmt({ merchant: "ANTHROPIC", amount: 100, currency: "USD", amountIls: 369.5 });
+    const [resUnder] = matchReceipts([s], [tooFarUnder]);
+    expect(resUnder.status).toBe("missing");
+
+    const overConverted = masterRow({ provider: "Anthropic", currency: "ILS", amount: "375" }); // over the converted figure
+    const [resOver] = matchReceipts([s], [overConverted]);
+    expect(resOver.status).toBe("missing");
+  });
+
+  it("still treats a non-ILS receipt against a different foreign currency as cross-currency review (conversion path only applies to ILS receipts)", () => {
+    // Receipt amount matches the statement's own (non-ILS) currency figure
+    // directly, but the currencies themselves differ — the ILS-conversion
+    // shortcut must not kick in for a non-ILS receipt currency.
+    const master = masterRow({ provider: "Anthropic", currency: "EUR", amount: "100" });
+    const s = stmt({ merchant: "ANTHROPIC", amount: 100, currency: "USD", amountIls: 369.5 });
+    const [res] = matchReceipts([s], [master]);
+    expect(res.status).toBe("review");
+    expect(res.reasons).toContain("cross-currency");
+  });
+
   it("accepts billing dates across the whole [-1, +3] day window", () => {
     const master = masterRow({ provider: "Wolt", date: "2026-03-10" });
     for (const billingDate of ["09.03.2026", "10.03.2026", "13.03.2026"]) {

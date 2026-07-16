@@ -1221,7 +1221,13 @@ async function handleStatementUpload(msg) {
       `*${comparison.unmatchedCount}* unaccounted. ` +
       (STATEMENT_DRY_RUN
         ? `_(dry-run mode — no DMs sent)_`
-        : `DMs sent to *${dmCount}* person(s). I'll follow up automatically if charges remain open.`),
+        : `DMs sent to *${dmCount}* person(s). I'll follow up automatically if charges remain open.`) +
+      (comparison.reviewCount > 0
+        ? `\n:mag: *${comparison.reviewCount}* charge(s) have a likely receipt already in Master DB but need a human look (currency or card mismatch) — not nudged, check Master DB directly.`
+        : "") +
+      (comparison.ambiguousCount > 0
+        ? `\n:grey_question: *${comparison.ambiguousCount}* charge(s) matched more than one possible receipt — still being chased, but worth a look to avoid a duplicate.`
+        : ""),
   }).catch(() => {});
 }
 
@@ -1321,10 +1327,13 @@ async function handleDmReceipt(msg) {
   rowValues[13] = "Matched"; // N column — override default "Pending"
   await appendReceiptRow(SHEETS_ID, rowValues);
 
-  await updateThreadAtomic(SHEETS_ID, { runId: thread.runId, userId: thread.userId }, (current) => {
+  const updatedThread = await updateThreadAtomic(SHEETS_ID, { runId: thread.runId, userId: thread.userId }, (current) => {
     const remaining = current.pendingCharges.filter((c) => c.clusterKey !== matched.clusterKey);
     return { pendingCharges: remaining, resolved: remaining.length === 0 };
   });
+
+  const remaining = updatedThread?.pendingCharges ?? [];
+  const allResolved = updatedThread?.resolved ?? remaining.length === 0;
 
   await slackApi("chat.postMessage", {
     channel:   msg.channel,
